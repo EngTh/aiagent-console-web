@@ -135,6 +135,9 @@ export class WSHandler {
       case 'sync-output':
         this.syncOutput(message.agentId, message.tabId, message.fromSeq)
         break
+      case 'get-buffer-stats':
+        this.getBufferStats(message.agentId, message.tabId)
+        break
     }
   }
 
@@ -190,6 +193,11 @@ export class WSHandler {
   private syncOutput(agentId: string, tabId: string, fromSeq: number): void {
     const { chunks, lastSeq } = this.agentManager.getOutputChunks(agentId, tabId, fromSeq)
     this.send({ type: 'output-sync', chunks, tabId, lastSeq })
+  }
+
+  private getBufferStats(agentId: string, tabId: string): void {
+    const stats = this.agentManager.getBufferStats(agentId, tabId)
+    this.send({ type: 'buffer-stats', agentId, tabId, stats })
   }
 
   private detachFromAgent(): void {
