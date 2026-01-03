@@ -194,6 +194,10 @@ export class AgentManager extends EventEmitter {
 
     tabProcess.outputChunks.push(chunk)
 
+    // Debug: log chunk creation
+    const totalSize = tabProcess.outputChunks.reduce((sum, c) => sum + c.data.length, 0)
+    console.log(`[DEBUG] Chunk added: seq=${chunk.seq}, size=${data.length}B, total=${totalSize}B, data preview: ${JSON.stringify(data.slice(0, 50))}`)
+
     // Trim old chunks if we have too many
     if (tabProcess.outputChunks.length > MAX_CHUNKS) {
       tabProcess.outputChunks = tabProcess.outputChunks.slice(-MAX_CHUNKS)
