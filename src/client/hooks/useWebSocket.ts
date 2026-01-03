@@ -1,8 +1,9 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import type { WSClientMessage, WSServerMessage, Agent, TabInfo } from '../../shared/types'
+import type { WSClientMessage, WSServerMessage, Agent, TabInfo, OutputChunk } from '../../shared/types'
 
 interface UseWebSocketOptions {
-  onOutput: (data: string, tabId?: string) => void
+  onOutput: (data: string, tabId: string, seq: number) => void
+  onOutputSync: (chunks: OutputChunk[], tabId: string, lastSeq: number) => void
   onAgentsUpdated: (agents: Agent[]) => void
   onAgentStatus: (agentId: string, status: Agent['status']) => void
   onTabStatus: (agentId: string, tabId: string, status: TabInfo['status']) => void
@@ -60,7 +61,12 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const handleMessage = useCallback((message: WSServerMessage) => {
     switch (message.type) {
       case 'output':
-        options.onOutput(message.data, message.tabId)
+        if (message.tabId) {
+          options.onOutput(message.data, message.tabId, message.seq)
+        }
+        break
+      case 'output-sync':
+        options.onOutputSync(message.chunks, message.tabId, message.lastSeq)
         break
       case 'attached':
         setAttachedAgentId(message.agentId)
@@ -102,8 +108,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
     }
   }, [])
 
-  const attach = useCallback((agentId: string, tabId?: string) => {
-    send({ type: 'attach', agentId, tabId })
+  const attach = useCallback((agentId: string, tabId?: string, fromSeq?: number) => {
+    send({ type: 'attach', agentId, tabId, fromSeq })
   }, [send])
 
   const detach = useCallback(() => {
@@ -138,6 +144,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
     send({ type: 'close-tab', agentId, tabId })
   }, [send])
 
+  const syncOutput = useCallback((agentId: string, tabId: string, fromSeq: number) => {
+    send({ type: 'sync-output', agentId, tabId, fromSeq })
+  }, [send])
+
   useEffect(() => {
     connect()
     return () => {
@@ -162,5 +172,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
     gainControl,
     createTab,
     closeTab,
+    syncOutput,
   }
 }

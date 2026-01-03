@@ -24,9 +24,23 @@ export interface AgentListResponse {
   agents: Agent[]
 }
 
+// Output chunk with sequence number for incremental sync
+export interface OutputChunk {
+  seq: number
+  data: string
+  timestamp: number
+}
+
+// Response for output sync API
+export interface OutputSyncResponse {
+  chunks: OutputChunk[]
+  lastSeq: number
+  hasMore: boolean
+}
+
 // WebSocket message types
 export type WSClientMessage =
-  | { type: 'attach'; agentId: string; tabId?: string }
+  | { type: 'attach'; agentId: string; tabId?: string; fromSeq?: number }
   | { type: 'detach' }
   | { type: 'input'; data: string; tabId?: string }
   | { type: 'resize'; cols: number; rows: number; tabId?: string }
@@ -35,10 +49,12 @@ export type WSClientMessage =
   | { type: 'gain-control' }
   | { type: 'create-tab'; agentId: string; name?: string }
   | { type: 'close-tab'; agentId: string; tabId: string }
+  | { type: 'sync-output'; agentId: string; tabId: string; fromSeq: number }
 
 export type WSServerMessage =
-  | { type: 'output'; data: string; tabId?: string }
-  | { type: 'attached'; agentId: string; tabId: string; hasControl: boolean }
+  | { type: 'output'; data: string; tabId?: string; seq: number }
+  | { type: 'output-sync'; chunks: OutputChunk[]; tabId: string; lastSeq: number }
+  | { type: 'attached'; agentId: string; tabId: string; hasControl: boolean; lastSeq: number }
   | { type: 'detached' }
   | { type: 'agent-status'; agentId: string; status: Agent['status'] }
   | { type: 'tab-status'; agentId: string; tabId: string; status: TabInfo['status'] }

@@ -8,7 +8,7 @@ import CreatePRDialog from './components/CreatePRDialog'
 import SettingsDialog from './components/SettingsDialog'
 import { useAgents } from './hooks/useAgents'
 import { useWebSocket } from './hooks/useWebSocket'
-import type { TabInfo } from '../shared/types'
+import type { TabInfo, OutputChunk } from '../shared/types'
 import styles from './App.module.css'
 
 type SplitMode = 'none' | 'horizontal' | 'vertical'
@@ -18,26 +18,23 @@ interface PanelState {
   tabId: string | null
 }
 
-// Client-side output buffer storage
-const outputBuffers = new Map<string, string>()
-const MAX_BUFFER_SIZE = 100000
+// Client-side sequence tracking per agentId:tabId
+const lastSeqMap = new Map<string, number>()
 
-function getBufferKey(agentId: string, tabId: string): string {
+function getSeqKey(agentId: string, tabId: string): string {
   return `${agentId}:${tabId}`
 }
 
-function appendToBuffer(agentId: string, tabId: string, data: string): void {
-  const key = getBufferKey(agentId, tabId)
-  const current = outputBuffers.get(key) || ''
-  let newBuffer = current + data
-  if (newBuffer.length > MAX_BUFFER_SIZE) {
-    newBuffer = newBuffer.slice(-MAX_BUFFER_SIZE)
-  }
-  outputBuffers.set(key, newBuffer)
+function getLastSeq(agentId: string, tabId: string): number {
+  return lastSeqMap.get(getSeqKey(agentId, tabId)) ?? -1
 }
 
-function getBuffer(agentId: string, tabId: string): string {
-  return outputBuffers.get(getBufferKey(agentId, tabId)) || ''
+function updateLastSeq(agentId: string, tabId: string, seq: number): void {
+  const key = getSeqKey(agentId, tabId)
+  const current = lastSeqMap.get(key) ?? -1
+  if (seq > current) {
+    lastSeqMap.set(key, seq)
+  }
 }
 
 export default function App() {
@@ -83,20 +80,36 @@ export default function App() {
     createPR,
   } = useAgents()
 
-  const handleOutput = useCallback((data: string, tabId?: string) => {
-    // Store in buffer and route to ALL panels showing this agent:tab
+  // Handle real-time output with sequence number
+  const handleOutput = useCallback((data: string, tabId: string, seq: number) => {
     const currentPanels = panelsRef.current
 
-    // Find which panels are showing this content
+    // Route output to ALL panels showing this tabId
     for (let i = 0; i < 2; i++) {
       const panel = currentPanels[i]
-      if (panel.agentId && panel.tabId) {
-        // Check if this output matches this panel's agent:tab
-        // The output comes with tabId, we need to check if any panel is showing this
-        if (tabId && panel.tabId === tabId) {
-          appendToBuffer(panel.agentId, panel.tabId, data)
-          terminalRefs[i].current?.write(data)
+      if (panel.agentId && panel.tabId === tabId) {
+        // Track sequence number for this agentId:tabId
+        updateLastSeq(panel.agentId, tabId, seq)
+        terminalRefs[i].current?.write(data)
+      }
+    }
+  }, [])
+
+  // Handle sync output (bulk chunks from server)
+  const handleOutputSync = useCallback((chunks: OutputChunk[], tabId: string, lastSeq: number) => {
+    const currentPanels = panelsRef.current
+
+    // Find panels showing this tabId and write all chunks
+    for (let i = 0; i < 2; i++) {
+      const panel = currentPanels[i]
+      if (panel.agentId && panel.tabId === tabId) {
+        // Clear and write all chunks in order
+        terminalRefs[i].current?.clear()
+        for (const chunk of chunks) {
+          terminalRefs[i].current?.write(chunk.data)
         }
+        // Update last seq
+        updateLastSeq(panel.agentId, tabId, lastSeq)
       }
     }
   }, [])
@@ -139,8 +152,10 @@ export default function App() {
     gainControl,
     createTab,
     closeTab,
+    syncOutput,
   } = useWebSocket({
     onOutput: handleOutput,
+    onOutputSync: handleOutputSync,
     onAgentsUpdated: updateAgents,
     onAgentStatus: updateAgentStatus,
     onTabStatus: handleTabStatus,
@@ -152,16 +167,6 @@ export default function App() {
   // Get current panel state
   const currentPanel = panels[activePanel]
   const selectedAgentId = currentPanel.agentId
-
-  // Restore buffer content when panel changes
-  const restoreBufferToTerminal = useCallback((panelIndex: number, agentId: string, tabId: string) => {
-    const terminalRef = terminalRefs[panelIndex]
-    const buffer = getBuffer(agentId, tabId)
-    terminalRef.current?.clear()
-    if (buffer) {
-      terminalRef.current?.write(buffer)
-    }
-  }, [])
 
   const handleSelectAgent = useCallback((agentId: string, panelIndex?: number) => {
     const targetPanel = panelIndex ?? activePanel
@@ -175,12 +180,12 @@ export default function App() {
     })
 
     if (targetPanel === activePanel && firstTabId) {
-      // Restore buffer content instead of clearing
-      restoreBufferToTerminal(targetPanel, agentId, firstTabId)
-      attach(agentId, firstTabId)
+      // Use incremental sync if we have previous seq, otherwise get all
+      const fromSeq = getLastSeq(agentId, firstTabId) + 1
+      attach(agentId, firstTabId, fromSeq > 0 ? fromSeq : undefined)
       setTimeout(() => terminalRefs[targetPanel].current?.focus(), 100)
     }
-  }, [agents, activePanel, attach, restoreBufferToTerminal])
+  }, [agents, activePanel, attach])
 
   const handleSelectTab = useCallback((tabId: string, panelIndex?: number) => {
     const targetPanel = panelIndex ?? activePanel
@@ -193,11 +198,11 @@ export default function App() {
       return newPanels
     })
 
-    // Restore buffer content instead of clearing
-    restoreBufferToTerminal(targetPanel, panel.agentId, tabId)
-    attach(panel.agentId, tabId)
+    // Use incremental sync if we have previous seq
+    const fromSeq = getLastSeq(panel.agentId, tabId) + 1
+    attach(panel.agentId, tabId, fromSeq > 0 ? fromSeq : undefined)
     setTimeout(() => terminalRefs[targetPanel].current?.focus(), 100)
-  }, [panels, activePanel, attach, restoreBufferToTerminal])
+  }, [panels, activePanel, attach])
 
   const handleCreateTab = useCallback((panelIndex?: number) => {
     const targetPanel = panelIndex ?? activePanel
@@ -272,12 +277,12 @@ export default function App() {
       setActivePanel(panelIndex)
       const panel = panels[panelIndex]
       if (panel.agentId && panel.tabId) {
-        // Restore buffer when switching panels
-        restoreBufferToTerminal(panelIndex, panel.agentId, panel.tabId)
-        attach(panel.agentId, panel.tabId)
+        // Use incremental sync when switching panels
+        const fromSeq = getLastSeq(panel.agentId, panel.tabId) + 1
+        attach(panel.agentId, panel.tabId, fromSeq > 0 ? fromSeq : undefined)
       }
     }
-  }, [activePanel, panels, attach, restoreBufferToTerminal])
+  }, [activePanel, panels, attach])
 
   const prDialogAgent = agents.find((a) => a.id === prDialogAgentId)
 

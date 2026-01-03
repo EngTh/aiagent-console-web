@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
-import type { Agent, TabInfo } from '../shared/types.js'
+import type { Agent, TabInfo, OutputChunk } from '../shared/types.js'
 import type { Config } from '../shared/config.js'
 import { GitWorktreeManager } from './git-worktree.js'
 import {
@@ -15,13 +15,16 @@ import {
   type PersistedAgent,
 } from './local-config.js'
 
-const MAX_BUFFER_SIZE = 100000 // ~100KB of history per tab
+const MAX_CHUNKS = 1000 // Max number of chunks to keep per tab
+const MAX_CHUNK_SIZE = 4096 // Merge small outputs into chunks up to this size
 const DEFAULT_TAB_NAME = 'Terminal'
 
 interface TabProcess {
   pty: pty.IPty | null
   info: TabInfo
-  outputBuffer: string
+  outputChunks: OutputChunk[]
+  currentSeq: number
+  pendingData: string // Buffer for merging small outputs
   logStream: fs.WriteStream | null
 }
 
@@ -35,6 +38,7 @@ export class AgentManager extends EventEmitter {
   private worktreeManager: GitWorktreeManager
   private controlOwners: Map<string, string> = new Map() // agentId:tabId -> clientId
   private config: Config
+  private flushTimers: Map<string, NodeJS.Timeout> = new Map()
 
   constructor(config: Config) {
     super()
@@ -69,13 +73,25 @@ export class AgentManager extends EventEmitter {
         tabs: [],
       }
 
-      // Create default tab with restored buffer
+      // Create default tab with restored buffer as a single chunk
       const defaultTabId = uuidv4()
       const tabs = new Map<string, TabProcess>()
+      const initialChunks: OutputChunk[] = []
+
+      if (pa.outputBuffer) {
+        initialChunks.push({
+          seq: 0,
+          data: pa.outputBuffer,
+          timestamp: Date.now(),
+        })
+      }
+
       tabs.set(defaultTabId, {
         pty: null,
         info: { id: defaultTabId, name: DEFAULT_TAB_NAME, status: 'idle' },
-        outputBuffer: pa.outputBuffer || '',
+        outputChunks: initialChunks,
+        currentSeq: initialChunks.length,
+        pendingData: '',
         logStream: null,
       })
 
@@ -115,11 +131,105 @@ export class AgentManager extends EventEmitter {
     }
   }
 
-  // Get output history for a specific tab
+  // Get output chunks from a specific sequence number
+  getOutputChunks(agentId: string, tabId: string, fromSeq: number = 0): { chunks: OutputChunk[]; lastSeq: number } {
+    const agentProcess = this.agents.get(agentId)
+    const tabProcess = agentProcess?.tabs.get(tabId)
+    if (!tabProcess) {
+      return { chunks: [], lastSeq: -1 }
+    }
+
+    const chunks = tabProcess.outputChunks.filter(c => c.seq >= fromSeq)
+    return {
+      chunks,
+      lastSeq: tabProcess.currentSeq - 1,
+    }
+  }
+
+  // Get the last sequence number for a tab
+  getLastSeq(agentId: string, tabId: string): number {
+    const agentProcess = this.agents.get(agentId)
+    const tabProcess = agentProcess?.tabs.get(tabId)
+    return tabProcess ? tabProcess.currentSeq - 1 : -1
+  }
+
+  // Get full output as string (for persistence)
   getOutputHistory(agentId: string, tabId: string): string {
     const agentProcess = this.agents.get(agentId)
     const tabProcess = agentProcess?.tabs.get(tabId)
-    return tabProcess?.outputBuffer || ''
+    if (!tabProcess) return ''
+    return tabProcess.outputChunks.map(c => c.data).join('')
+  }
+
+  // Add output chunk with sequence number
+  private addOutputChunk(agentId: string, tabId: string, data: string): OutputChunk {
+    const agentProcess = this.agents.get(agentId)
+    const tabProcess = agentProcess?.tabs.get(tabId)
+    if (!tabProcess) {
+      throw new Error(`Tab not found: ${tabId}`)
+    }
+
+    const chunk: OutputChunk = {
+      seq: tabProcess.currentSeq++,
+      data,
+      timestamp: Date.now(),
+    }
+
+    tabProcess.outputChunks.push(chunk)
+
+    // Trim old chunks if we have too many
+    if (tabProcess.outputChunks.length > MAX_CHUNKS) {
+      tabProcess.outputChunks = tabProcess.outputChunks.slice(-MAX_CHUNKS)
+    }
+
+    return chunk
+  }
+
+  // Flush pending data to a chunk
+  private flushPendingData(agentId: string, tabId: string): void {
+    const key = this.getControlKey(agentId, tabId)
+    const timer = this.flushTimers.get(key)
+    if (timer) {
+      clearTimeout(timer)
+      this.flushTimers.delete(key)
+    }
+
+    const agentProcess = this.agents.get(agentId)
+    const tabProcess = agentProcess?.tabs.get(tabId)
+    if (!tabProcess || !tabProcess.pendingData) return
+
+    const chunk = this.addOutputChunk(agentId, tabId, tabProcess.pendingData)
+    tabProcess.pendingData = ''
+
+    // Emit the chunk with seq number
+    this.emit('pty-data', agentId, tabId, chunk.data, chunk.seq)
+  }
+
+  // Handle incoming PTY data - buffer small outputs
+  private handlePtyData(agentId: string, tabId: string, data: string): void {
+    const agentProcess = this.agents.get(agentId)
+    const tabProcess = agentProcess?.tabs.get(tabId)
+    if (!tabProcess) return
+
+    // Write to log
+    if (tabProcess.logStream) {
+      tabProcess.logStream.write(data)
+    }
+
+    tabProcess.pendingData += data
+
+    // If pending data is large enough, flush immediately
+    if (tabProcess.pendingData.length >= MAX_CHUNK_SIZE) {
+      this.flushPendingData(agentId, tabId)
+    } else {
+      // Otherwise, set a timer to flush soon (debounce small outputs)
+      const key = this.getControlKey(agentId, tabId)
+      if (!this.flushTimers.has(key)) {
+        this.flushTimers.set(key, setTimeout(() => {
+          this.flushPendingData(agentId, tabId)
+        }, 50)) // 50ms debounce
+      }
+    }
   }
 
   // Create log file for a tab
@@ -180,7 +290,9 @@ export class AgentManager extends EventEmitter {
     tabs.set(defaultTabId, {
       pty: null,
       info: defaultTab,
-      outputBuffer: '',
+      outputChunks: [],
+      currentSeq: 0,
+      pendingData: '',
       logStream: null,
     })
 
@@ -214,7 +326,9 @@ export class AgentManager extends EventEmitter {
     agentProcess.tabs.set(tabId, {
       pty: null,
       info: tabInfo,
-      outputBuffer: '',
+      outputChunks: [],
+      currentSeq: 0,
+      pendingData: '',
       logStream: null,
     })
 
@@ -238,6 +352,14 @@ export class AgentManager extends EventEmitter {
       throw new Error(`Tab not found: ${tabId}`)
     }
 
+    // Clear flush timer
+    const key = this.getControlKey(agentId, tabId)
+    const timer = this.flushTimers.get(key)
+    if (timer) {
+      clearTimeout(timer)
+      this.flushTimers.delete(key)
+    }
+
     // Kill PTY if running
     if (tabProcess.pty) {
       tabProcess.pty.kill()
@@ -249,7 +371,7 @@ export class AgentManager extends EventEmitter {
     }
 
     // Remove control
-    this.controlOwners.delete(this.getControlKey(agentId, tabId))
+    this.controlOwners.delete(key)
 
     agentProcess.tabs.delete(tabId)
 
@@ -268,13 +390,21 @@ export class AgentManager extends EventEmitter {
 
     // Close all tabs
     for (const [tabId, tabProcess] of agentProcess.tabs) {
+      // Clear flush timer
+      const key = this.getControlKey(agentId, tabId)
+      const timer = this.flushTimers.get(key)
+      if (timer) {
+        clearTimeout(timer)
+        this.flushTimers.delete(key)
+      }
+
       if (tabProcess.logStream) {
         tabProcess.logStream.end()
       }
       if (tabProcess.pty) {
         tabProcess.pty.kill()
       }
-      this.controlOwners.delete(this.getControlKey(agentId, tabId))
+      this.controlOwners.delete(key)
     }
 
     // Remove worktree
@@ -347,19 +477,13 @@ export class AgentManager extends EventEmitter {
 
     // Handle PTY data
     ptyProcess.onData((data) => {
-      tabProcess.outputBuffer += data
-      if (tabProcess.outputBuffer.length > MAX_BUFFER_SIZE) {
-        tabProcess.outputBuffer = tabProcess.outputBuffer.slice(-MAX_BUFFER_SIZE)
-      }
-
-      if (tabProcess.logStream) {
-        tabProcess.logStream.write(data)
-      }
-
-      this.emit('pty-data', agentId, tabId, data)
+      this.handlePtyData(agentId, tabId, data)
     })
 
     ptyProcess.onExit(() => {
+      // Flush any pending data
+      this.flushPendingData(agentId, tabId)
+
       if (tabProcess.logStream) {
         tabProcess.logStream.end()
         tabProcess.logStream = null
@@ -368,7 +492,10 @@ export class AgentManager extends EventEmitter {
       // Save output buffer for recovery (first tab only for now)
       const firstTabId = agentProcess.tabs.keys().next().value
       if (tabId === firstTabId) {
-        updatePersistedAgentBuffer(agentId, tabProcess.outputBuffer)
+        const fullOutput = this.getOutputHistory(agentId, tabId)
+        // Only save last 50KB for persistence
+        const persistBuffer = fullOutput.slice(-50000)
+        updatePersistedAgentBuffer(agentId, persistBuffer)
       }
 
       tabProcess.pty = null
@@ -391,6 +518,9 @@ export class AgentManager extends EventEmitter {
 
     const tabProcess = agentProcess.tabs.get(tabId)
     if (!tabProcess || !tabProcess.pty) return
+
+    // Flush pending data before stopping
+    this.flushPendingData(agentId, tabId)
 
     tabProcess.pty.kill()
     tabProcess.pty = null
@@ -475,12 +605,23 @@ export class AgentManager extends EventEmitter {
 
   shutdown(): void {
     console.log(`Stopping ${this.agents.size} agent(s)...`)
+
+    // Clear all flush timers
+    for (const timer of this.flushTimers.values()) {
+      clearTimeout(timer)
+    }
+    this.flushTimers.clear()
+
     for (const [agentId, agentProcess] of this.agents) {
       for (const [tabId, tabProcess] of agentProcess.tabs) {
         // Save output buffer for first tab
         const firstTabId = agentProcess.tabs.keys().next().value
-        if (tabId === firstTabId && tabProcess.outputBuffer) {
-          updatePersistedAgentBuffer(agentId, tabProcess.outputBuffer)
+        if (tabId === firstTabId) {
+          const fullOutput = this.getOutputHistory(agentId, tabId)
+          const persistBuffer = fullOutput.slice(-50000)
+          if (persistBuffer) {
+            updatePersistedAgentBuffer(agentId, persistBuffer)
+          }
         }
 
         if (tabProcess.logStream) {
