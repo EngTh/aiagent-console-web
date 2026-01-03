@@ -5,9 +5,11 @@ import * as path from 'path'
 import { fileURLToPath } from 'url'
 import { AgentManager } from './agent-manager.js'
 import { WSHandler } from './ws-handler.js'
+import { loadConfig } from '../shared/config.js'
 import type { CreateAgentRequest } from '../shared/types.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+const config = loadConfig()
 
 const app = express()
 const server = createServer(app)
@@ -123,7 +125,7 @@ wss.on('connection', (ws: WebSocket) => {
 })
 
 // Start server
-const PORT = process.env.PORT || 3000
+const PORT = process.env.PORT || config.port
 server.listen(PORT, () => {
-  console.log(`🚀 AI Agent Console server running at http://localhost:${PORT}`)
+  console.log(`AI Agent Console server running at http://localhost:${PORT}`)
 })

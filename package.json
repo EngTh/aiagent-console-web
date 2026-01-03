@@ -11,6 +11,11 @@
     "build:client": "vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "start": "node dist/server/index.js",
+    "start:bg": "pm2 start ecosystem.config.cjs",
+    "stop": "pm2 stop aiagent-console",
+    "restart": "pm2 restart aiagent-console",
+    "logs": "pm2 logs aiagent-console",
+    "status": "pm2 status",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -70,17 +70,53 @@ npm run dev
 
 访问 http://localhost:5173
 
+### 配置
+
+复制配置模板并根据需要修改：
+
+```bash
+cp config.example.json config.json
+```
+
+```json
+{
+  "port": 3000,      // 后端服务端口
+  "vitePort": 5173   // 开发模式下 Vite 端口
+}
+```
+
 ### 生产部署
 
 ```bash
 # 构建
 npm run build
 
-# 启动服务
+# 前台启动
 npm start
+
+# 或后台启动 (需要 pm2)
+npm run start:bg
 ```
 
 服务运行在 http://localhost:3000
+
+### 后台运行 (PM2)
+
+安装 PM2：
+
+```bash
+npm install -g pm2
+```
+
+常用命令：
+
+| 命令 | 说明 |
+|------|------|
+| `npm run start:bg` | 后台启动服务 |
+| `npm run stop` | 停止服务 |
+| `npm run restart` | 重启服务 |
+| `npm run logs` | 查看日志 |
+| `npm run status` | 查看运行状态 |
 
 ## 使用指南
 

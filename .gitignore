@@ -9,6 +9,9 @@ dist/
 .env.local
 .env.*.local
 
+# Local config (use config.example.json as template)
+config.json
+
 # Logs
 *.log
 npm-debug.log*
