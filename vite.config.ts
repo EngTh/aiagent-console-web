@@ -20,7 +20,7 @@ function loadConfig(): Config {
 }
 
 const config = loadConfig()
-const SERVER_PORT = config.port || 3000
+const SERVER_PORT = config.port || 17930
 const VITE_PORT = config.vitePort || 5173
 
 export default defineConfig({
