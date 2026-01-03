@@ -9,7 +9,7 @@ export class WSHandler {
   private clientId: string
   private attachedAgentId: string | null = null
   private attachedTabId: string | null = null
-  private boundPtyDataHandler: (agentId: string, tabId: string, data: string) => void
+  private boundPtyDataHandler: (agentId: string, tabId: string, data: string, seq: number) => void
   private boundAgentsUpdatedHandler: (agents: unknown[]) => void
   private boundAgentStatusHandler: (agentId: string, status: string) => void
   private boundTabStatusHandler: (agentId: string, tabId: string, status: string) => void
@@ -58,10 +58,10 @@ export class WSHandler {
     this.agentManager.on('tab-closed', this.boundTabClosedHandler)
   }
 
-  private handlePtyData(agentId: string, tabId: string, data: string): void {
+  private handlePtyData(agentId: string, tabId: string, data: string, seq: number): void {
     // Only send data if this client is attached to this agent and tab
     if (this.attachedAgentId === agentId && this.attachedTabId === tabId) {
-      this.send({ type: 'output', data, tabId })
+      this.send({ type: 'output', data, tabId, seq })
     }
   }
 
@@ -106,7 +106,7 @@ export class WSHandler {
   private handleMessage(message: WSClientMessage): void {
     switch (message.type) {
       case 'attach':
-        this.attachToAgent(message.agentId, message.tabId)
+        this.attachToAgent(message.agentId, message.tabId, message.fromSeq)
         break
       case 'detach':
         this.detachFromAgent()
@@ -132,10 +132,13 @@ export class WSHandler {
       case 'close-tab':
         this.closeTab(message.agentId, message.tabId)
         break
+      case 'sync-output':
+        this.syncOutput(message.agentId, message.tabId, message.fromSeq)
+        break
     }
   }
 
-  private attachToAgent(agentId: string, tabId?: string): void {
+  private attachToAgent(agentId: string, tabId?: string, fromSeq?: number): void {
     // Release control from previous agent/tab if attached
     if (this.attachedAgentId && this.attachedTabId) {
       this.agentManager.releaseControl(this.attachedAgentId, this.attachedTabId, this.clientId)
@@ -171,13 +174,22 @@ export class WSHandler {
       hasControl = true
     }
 
-    this.send({ type: 'attached', agentId, tabId: targetTabId, hasControl })
+    // Get last sequence number for incremental sync
+    const lastSeq = this.agentManager.getLastSeq(agentId, targetTabId)
 
-    // Send history output so new connections can see previous terminal content
-    const history = this.agentManager.getOutputHistory(agentId, targetTabId)
-    if (history) {
-      this.send({ type: 'output', data: history, tabId: targetTabId })
+    this.send({ type: 'attached', agentId, tabId: targetTabId, hasControl, lastSeq })
+
+    // Send output chunks for sync
+    // If fromSeq is provided, only send chunks from that seq; otherwise send all
+    const { chunks } = this.agentManager.getOutputChunks(agentId, targetTabId, fromSeq ?? 0)
+    if (chunks.length > 0) {
+      this.send({ type: 'output-sync', chunks, tabId: targetTabId, lastSeq })
     }
+  }
+
+  private syncOutput(agentId: string, tabId: string, fromSeq: number): void {
+    const { chunks, lastSeq } = this.agentManager.getOutputChunks(agentId, tabId, fromSeq)
+    this.send({ type: 'output-sync', chunks, tabId, lastSeq })
   }
 
   private detachFromAgent(): void {

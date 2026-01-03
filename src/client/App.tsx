@@ -8,7 +8,7 @@ import CreatePRDialog from './components/CreatePRDialog'
 import SettingsDialog from './components/SettingsDialog'
 import { useAgents } from './hooks/useAgents'
 import { useWebSocket } from './hooks/useWebSocket'
-import type { TabInfo } from '../shared/types'
+import type { TabInfo, OutputChunk } from '../shared/types'
 import styles from './App.module.css'
 
 type SplitMode = 'none' | 'horizontal' | 'vertical'
@@ -16,6 +16,25 @@ type SplitMode = 'none' | 'horizontal' | 'vertical'
 interface PanelState {
   agentId: string | null
   tabId: string | null
+}
+
+// Client-side sequence tracking per agentId:tabId
+const lastSeqMap = new Map<string, number>()
+
+function getSeqKey(agentId: string, tabId: string): string {
+  return `${agentId}:${tabId}`
+}
+
+function getLastSeq(agentId: string, tabId: string): number {
+  return lastSeqMap.get(getSeqKey(agentId, tabId)) ?? -1
+}
+
+function updateLastSeq(agentId: string, tabId: string, seq: number): void {
+  const key = getSeqKey(agentId, tabId)
+  const current = lastSeqMap.get(key) ?? -1
+  if (seq > current) {
+    lastSeqMap.set(key, seq)
+  }
 }
 
 export default function App() {
@@ -37,6 +56,10 @@ export default function App() {
   const terminalRef1 = useRef<TerminalHandle>(null)
   const terminalRefs = [terminalRef0, terminalRef1]
 
+  // Track what each panel is currently displaying to route output correctly
+  const panelsRef = useRef(panels)
+  panelsRef.current = panels
+
   // Fetch terminal settings on mount
   useEffect(() => {
     fetch('/api/terminal-settings')
@@ -57,11 +80,39 @@ export default function App() {
     createPR,
   } = useAgents()
 
-  const handleOutput = useCallback((data: string, tabId?: string) => {
-    // Route output to correct terminal based on attached tab
-    const terminalRef = terminalRefs[activePanel]
-    terminalRef.current?.write(data)
-  }, [activePanel])
+  // Handle real-time output with sequence number
+  const handleOutput = useCallback((data: string, tabId: string, seq: number) => {
+    const currentPanels = panelsRef.current
+
+    // Route output to ALL panels showing this tabId
+    for (let i = 0; i < 2; i++) {
+      const panel = currentPanels[i]
+      if (panel.agentId && panel.tabId === tabId) {
+        // Track sequence number for this agentId:tabId
+        updateLastSeq(panel.agentId, tabId, seq)
+        terminalRefs[i].current?.write(data)
+      }
+    }
+  }, [])
+
+  // Handle sync output (bulk chunks from server)
+  const handleOutputSync = useCallback((chunks: OutputChunk[], tabId: string, lastSeq: number) => {
+    const currentPanels = panelsRef.current
+
+    // Find panels showing this tabId and write all chunks
+    for (let i = 0; i < 2; i++) {
+      const panel = currentPanels[i]
+      if (panel.agentId && panel.tabId === tabId) {
+        // Clear and write all chunks in order
+        terminalRefs[i].current?.clear()
+        for (const chunk of chunks) {
+          terminalRefs[i].current?.write(chunk.data)
+        }
+        // Update last seq
+        updateLastSeq(panel.agentId, tabId, lastSeq)
+      }
+    }
+  }, [])
 
   const handleError = useCallback((message: string) => {
     console.error('WebSocket error:', message)
@@ -101,8 +152,10 @@ export default function App() {
     gainControl,
     createTab,
     closeTab,
+    syncOutput,
   } = useWebSocket({
     onOutput: handleOutput,
+    onOutputSync: handleOutputSync,
     onAgentsUpdated: updateAgents,
     onAgentStatus: updateAgentStatus,
     onTabStatus: handleTabStatus,
@@ -126,39 +179,42 @@ export default function App() {
       return newPanels
     })
 
-    if (targetPanel === activePanel) {
-      const terminalRef = terminalRefs[activePanel]
-      terminalRef.current?.clear()
-      attach(agentId, firstTabId || undefined)
-      setTimeout(() => terminalRef.current?.focus(), 100)
+    if (targetPanel === activePanel && firstTabId) {
+      // Use incremental sync if we have previous seq, otherwise get all
+      const fromSeq = getLastSeq(agentId, firstTabId) + 1
+      attach(agentId, firstTabId, fromSeq > 0 ? fromSeq : undefined)
+      setTimeout(() => terminalRefs[targetPanel].current?.focus(), 100)
     }
   }, [agents, activePanel, attach])
 
-  const handleSelectTab = useCallback((tabId: string) => {
-    const panel = panels[activePanel]
+  const handleSelectTab = useCallback((tabId: string, panelIndex?: number) => {
+    const targetPanel = panelIndex ?? activePanel
+    const panel = panels[targetPanel]
     if (!panel.agentId) return
 
     setPanels(prev => {
       const newPanels = [...prev] as [PanelState, PanelState]
-      newPanels[activePanel] = { ...newPanels[activePanel], tabId }
+      newPanels[targetPanel] = { ...newPanels[targetPanel], tabId }
       return newPanels
     })
 
-    const terminalRef = terminalRefs[activePanel]
-    terminalRef.current?.clear()
-    attach(panel.agentId, tabId)
-    setTimeout(() => terminalRef.current?.focus(), 100)
+    // Use incremental sync if we have previous seq
+    const fromSeq = getLastSeq(panel.agentId, tabId) + 1
+    attach(panel.agentId, tabId, fromSeq > 0 ? fromSeq : undefined)
+    setTimeout(() => terminalRefs[targetPanel].current?.focus(), 100)
   }, [panels, activePanel, attach])
 
-  const handleCreateTab = useCallback(() => {
-    const panel = panels[activePanel]
+  const handleCreateTab = useCallback((panelIndex?: number) => {
+    const targetPanel = panelIndex ?? activePanel
+    const panel = panels[targetPanel]
     if (panel.agentId) {
       createTab(panel.agentId)
     }
   }, [panels, activePanel, createTab])
 
-  const handleCloseTab = useCallback((tabId: string) => {
-    const panel = panels[activePanel]
+  const handleCloseTab = useCallback((tabId: string, panelIndex?: number) => {
+    const targetPanel = panelIndex ?? activePanel
+    const panel = panels[targetPanel]
     if (panel.agentId) {
       closeTab(panel.agentId, tabId)
     }
@@ -220,8 +276,10 @@ export default function App() {
     if (activePanel !== panelIndex) {
       setActivePanel(panelIndex)
       const panel = panels[panelIndex]
-      if (panel.agentId) {
-        attach(panel.agentId, panel.tabId || undefined)
+      if (panel.agentId && panel.tabId) {
+        // Use incremental sync when switching panels
+        const fromSeq = getLastSeq(panel.agentId, panel.tabId) + 1
+        attach(panel.agentId, panel.tabId, fromSeq > 0 ? fromSeq : undefined)
       }
     }
   }, [activePanel, panels, attach])
@@ -281,10 +339,10 @@ export default function App() {
             if (panelIndex !== activePanel) {
               setActivePanel(panelIndex)
             }
-            handleSelectTab(tabId)
+            handleSelectTab(tabId, panelIndex)
           }}
-          onCreateTab={handleCreateTab}
-          onCloseTab={handleCloseTab}
+          onCreateTab={() => handleCreateTab(panelIndex)}
+          onCloseTab={(tabId) => handleCloseTab(tabId, panelIndex)}
         />
         <div className={styles.terminalContainer}>
           <Terminal

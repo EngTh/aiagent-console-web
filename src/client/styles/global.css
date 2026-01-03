@@ -1,16 +1,18 @@
 :root {
-  --bg-primary: #1a1b26;
-  --bg-secondary: #24283b;
-  --bg-tertiary: #2a2e3f;
-  --text-primary: #c0caf5;
-  --text-secondary: #a9b1d6;
-  --text-muted: #565f89;
-  --accent: #7aa2f7;
-  --accent-hover: #89b4fa;
-  --success: #9ece6a;
-  --warning: #e0af68;
-  --danger: #f7768e;
-  --border: #3b4261;
+  /* VS Code Dark theme colors */
+  --bg-primary: #1e1e1e;
+  --bg-secondary: #252526;
+  --bg-tertiary: #2d2d2d;
+  --bg-hover: #2a2d2e;
+  --text-primary: #d4d4d4;
+  --text-secondary: #cccccc;
+  --text-muted: #858585;
+  --accent: #007acc;
+  --accent-hover: #1c97ea;
+  --success: #4ec9b0;
+  --warning: #dcdcaa;
+  --danger: #f14c4c;
+  --border: #3c3c3c;
   --sidebar-width: 280px;
 }
 
