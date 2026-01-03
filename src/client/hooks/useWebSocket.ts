@@ -113,6 +113,8 @@ export function useWebSocket(options: UseWebSocketOptions) {
   }, [])
 
   const attach = useCallback((agentId: string, tabId?: string, fromSeq?: number) => {
+    console.log(`[DEBUG] attach called: agentId=${agentId}, tabId=${tabId}, fromSeq=${fromSeq}`)
+    console.trace('[DEBUG] attach stack trace')
     send({ type: 'attach', agentId, tabId, fromSeq })
   }, [send])
 
