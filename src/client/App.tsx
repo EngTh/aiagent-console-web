@@ -26,7 +26,10 @@ function getSeqKey(agentId: string, tabId: string): string {
 }
 
 function getLastSeq(agentId: string, tabId: string): number {
-  return lastSeqMap.get(getSeqKey(agentId, tabId)) ?? -1
+  const key = getSeqKey(agentId, tabId)
+  const value = lastSeqMap.get(key) ?? -1
+  console.log(`[DEBUG] getLastSeq: key=${key}, value=${value}, mapSize=${lastSeqMap.size}`)
+  return value
 }
 
 function updateLastSeq(agentId: string, tabId: string, seq: number): void {
@@ -34,6 +37,7 @@ function updateLastSeq(agentId: string, tabId: string, seq: number): void {
   const current = lastSeqMap.get(key) ?? -1
   if (seq > current) {
     lastSeqMap.set(key, seq)
+    console.log(`[DEBUG] updateLastSeq: key=${key}, seq=${seq}, mapSize=${lastSeqMap.size}`)
   }
 }
 
