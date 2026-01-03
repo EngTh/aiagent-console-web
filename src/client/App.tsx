@@ -96,6 +96,7 @@ export default function App() {
   // Handle real-time output with sequence number
   const handleOutput = useCallback((data: string, tabId: string, seq: number) => {
     const currentPanels = panelsRef.current
+    console.log(`[DEBUG] handleOutput: seq=${seq}, tabId=${tabId}, dataLen=${data.length}`)
 
     // Route output to ALL panels showing this tabId
     for (let i = 0; i < 2; i++) {
@@ -104,6 +105,7 @@ export default function App() {
         // Track sequence number for this agentId:tabId
         updateLastSeq(panel.agentId, tabId, seq)
         terminalRefs[i].current?.write(data)
+        console.log(`[DEBUG] Wrote to panel ${i}`)
       }
     }
   }, [])
@@ -111,6 +113,7 @@ export default function App() {
   // Handle sync output (bulk chunks from server)
   const handleOutputSync = useCallback((chunks: OutputChunk[], tabId: string, lastSeq: number) => {
     const currentPanels = panelsRef.current
+    console.log(`[DEBUG] handleOutputSync: chunks=${chunks.length}, tabId=${tabId}, lastSeq=${lastSeq}`)
 
     if (chunks.length === 0) return
 
@@ -123,6 +126,7 @@ export default function App() {
 
         // Check if this is a full sync (chunks start from 0 and we haven't seen data yet)
         const isFullSync = firstChunkSeq === 0 && currentLastSeq === -1
+        console.log(`[DEBUG] Panel ${i}: currentLastSeq=${currentLastSeq}, firstChunkSeq=${firstChunkSeq}, isFullSync=${isFullSync}`)
 
         if (isFullSync) {
           // Full sync: clear and write all
