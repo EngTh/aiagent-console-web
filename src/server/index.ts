@@ -20,8 +20,8 @@ const agentManager = new AgentManager()
 // Middleware
 app.use(express.json())
 
-// Serve static files in production
-if (process.env.NODE_ENV === 'production') {
+// Serve static files (skip only in dev mode with vite)
+if (process.env.NODE_ENV !== 'development') {
   app.use(express.static(path.join(__dirname, '../client')))
 }
 
@@ -117,6 +117,13 @@ app.post('/api/agents/:id/pr', async (req, res) => {
     })
   }
 })
+
+// SPA fallback - serve index.html for all non-API routes
+if (process.env.NODE_ENV !== 'development') {
+  app.get('*', (_req, res) => {
+    res.sendFile(path.join(__dirname, '../client/index.html'))
+  })
+}
 
 // WebSocket connections
 wss.on('connection', (ws: WebSocket) => {
