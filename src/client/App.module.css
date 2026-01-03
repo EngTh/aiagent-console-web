@@ -11,86 +11,46 @@
   min-width: 0;
 }
 
-.header {
+/* Toolbar with split buttons */
+.toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 20px;
+  padding: 8px 16px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
 }
 
-.agentInfo {
+.splitButtons {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
+  gap: 4px;
 }
 
-.agentName {
-  font-size: 15px;
-  font-weight: 600;
+.splitBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  font-size: 14px;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s;
+}
+
+.splitBtn:hover {
+  border-color: var(--accent);
   color: var(--text-primary);
 }
 
-.agentPath {
-  font-size: 12px;
-  color: var(--text-muted);
-  font-family: 'JetBrains Mono', monospace;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.noAgent {
-  font-size: 14px;
-  color: var(--text-muted);
-}
-
-.headerRight {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-}
-
-.controlStatus {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.controlLabel {
-  font-size: 12px;
-  color: var(--success);
-  padding: 4px 8px;
-  background: rgba(34, 197, 94, 0.15);
-  border-radius: 4px;
-  font-weight: 500;
-}
-
-.viewOnlyLabel {
-  font-size: 12px;
-  color: var(--warning, #f59e0b);
-  padding: 4px 8px;
-  background: rgba(245, 158, 11, 0.15);
-  border-radius: 4px;
-  font-weight: 500;
-}
-
-.gainControlBtn {
-  font-size: 12px;
-  padding: 4px 10px;
+.splitBtn.active {
+  border-color: var(--accent);
   background: var(--accent);
   color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: 500;
-  transition: opacity 0.15s;
-}
-
-.gainControlBtn:hover {
-  opacity: 0.85;
 }
 
 .connectionStatus {
@@ -107,20 +67,130 @@
   border-radius: 50%;
 }
 
+/* Content area */
+.content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  background: var(--bg-primary);
+}
+
+/* Terminal panel */
+.terminalPanel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  min-height: 0;
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.terminalPanel.activePanel {
+  border-color: var(--accent);
+}
+
+.panelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.agentInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.agentName {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.agentPath {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'JetBrains Mono', monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.noAgent {
+  font-size: 14px;
+  color: var(--text-muted);
+}
+
+.controlStatus {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.controlLabel {
+  font-size: 11px;
+  color: var(--success);
+  padding: 3px 6px;
+  background: rgba(34, 197, 94, 0.15);
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.viewOnlyLabel {
+  font-size: 11px;
+  color: var(--warning, #f59e0b);
+  padding: 3px 6px;
+  background: rgba(245, 158, 11, 0.15);
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.gainControlBtn {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.15s;
+}
+
+.gainControlBtn:hover {
+  opacity: 0.85;
+}
+
 .terminalContainer {
   flex: 1;
   min-height: 0;
   background: var(--bg-primary);
 }
 
+/* Empty terminal */
 .emptyTerminal {
   height: 100%;
+  width: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 16px;
   color: var(--text-muted);
+  background: var(--bg-primary);
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.emptyTerminal.activePanel {
+  border-color: var(--accent);
 }
 
 .emptyIcon {
@@ -135,6 +205,7 @@
   line-height: 1.5;
 }
 
+/* Loading state */
 .loading {
   height: 100%;
   display: flex;

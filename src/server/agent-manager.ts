@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
-import type { Agent } from '../shared/types.js'
+import type { Agent, TabInfo } from '../shared/types.js'
 import type { Config } from '../shared/config.js'
 import { GitWorktreeManager } from './git-worktree.js'
 import {
@@ -15,19 +15,25 @@ import {
   type PersistedAgent,
 } from './local-config.js'
 
-const MAX_BUFFER_SIZE = 100000 // ~100KB of history per agent
+const MAX_BUFFER_SIZE = 100000 // ~100KB of history per tab
+const DEFAULT_TAB_NAME = 'Terminal'
+
+interface TabProcess {
+  pty: pty.IPty | null
+  info: TabInfo
+  outputBuffer: string
+  logStream: fs.WriteStream | null
+}
 
 interface AgentProcess {
-  pty: pty.IPty | null
   agent: Agent
-  outputBuffer: string // Store recent output for new connections
-  logStream: fs.WriteStream | null // Log file stream
+  tabs: Map<string, TabProcess>
 }
 
 export class AgentManager extends EventEmitter {
   private agents: Map<string, AgentProcess> = new Map()
   private worktreeManager: GitWorktreeManager
-  private controlOwners: Map<string, string> = new Map()
+  private controlOwners: Map<string, string> = new Map() // agentId:tabId -> clientId
   private config: Config
 
   constructor(config: Config) {
@@ -60,61 +66,69 @@ export class AgentManager extends EventEmitter {
         branch: pa.branch,
         status: 'idle',
         createdAt: pa.createdAt,
+        tabs: [],
       }
 
-      this.agents.set(pa.id, {
+      // Create default tab with restored buffer
+      const defaultTabId = uuidv4()
+      const tabs = new Map<string, TabProcess>()
+      tabs.set(defaultTabId, {
         pty: null,
-        agent,
+        info: { id: defaultTabId, name: DEFAULT_TAB_NAME, status: 'idle' },
         outputBuffer: pa.outputBuffer || '',
         logStream: null,
       })
+
+      agent.tabs = [{ id: defaultTabId, name: DEFAULT_TAB_NAME, status: 'idle' }]
+
+      this.agents.set(pa.id, { agent, tabs })
 
       console.log(`Loaded agent: ${pa.name} (${pa.id})`)
     }
   }
 
+  private getControlKey(agentId: string, tabId: string): string {
+    return `${agentId}:${tabId}`
+  }
+
   // Control management
-  getControlOwner(agentId: string): string | null {
-    return this.controlOwners.get(agentId) || null
+  getControlOwner(agentId: string, tabId: string): string | null {
+    return this.controlOwners.get(this.getControlKey(agentId, tabId)) || null
   }
 
-  hasControl(agentId: string, clientId: string): boolean {
-    return this.controlOwners.get(agentId) === clientId
+  hasControl(agentId: string, tabId: string, clientId: string): boolean {
+    return this.controlOwners.get(this.getControlKey(agentId, tabId)) === clientId
   }
 
-  tryGainControl(agentId: string, clientId: string): boolean {
-    const currentOwner = this.controlOwners.get(agentId)
-    if (!currentOwner) {
-      this.controlOwners.set(agentId, clientId)
-      this.emit('control-changed', agentId, clientId)
-      return true
-    }
-    this.controlOwners.set(agentId, clientId)
-    this.emit('control-changed', agentId, clientId)
+  tryGainControl(agentId: string, tabId: string, clientId: string): boolean {
+    const key = this.getControlKey(agentId, tabId)
+    this.controlOwners.set(key, clientId)
+    this.emit('control-changed', agentId, tabId, clientId)
     return true
   }
 
-  releaseControl(agentId: string, clientId: string): void {
-    if (this.controlOwners.get(agentId) === clientId) {
-      this.controlOwners.delete(agentId)
-      this.emit('control-changed', agentId, null)
+  releaseControl(agentId: string, tabId: string, clientId: string): void {
+    const key = this.getControlKey(agentId, tabId)
+    if (this.controlOwners.get(key) === clientId) {
+      this.controlOwners.delete(key)
+      this.emit('control-changed', agentId, tabId, null)
     }
   }
 
-  // Get output history for a specific agent
-  getOutputHistory(agentId: string): string {
+  // Get output history for a specific tab
+  getOutputHistory(agentId: string, tabId: string): string {
     const agentProcess = this.agents.get(agentId)
-    return agentProcess?.outputBuffer || ''
+    const tabProcess = agentProcess?.tabs.get(tabId)
+    return tabProcess?.outputBuffer || ''
   }
 
-  // Create log file for an agent
-  private createLogStream(agent: Agent): fs.WriteStream | null {
+  // Create log file for a tab
+  private createLogStream(agent: Agent, tabName: string): fs.WriteStream | null {
     if (!this.config.logEnabled || !this.config.logDir) {
       return null
     }
 
     try {
-      // Create log directory structure: logDir/YYYY-MM/DD/
       const now = new Date()
       const year = now.getFullYear()
       const month = String(now.getMonth() + 1).padStart(2, '0')
@@ -124,9 +138,8 @@ export class AgentManager extends EventEmitter {
       const logDir = path.join(this.config.logDir, `${year}-${month}`, day)
       fs.mkdirSync(logDir, { recursive: true })
 
-      // Sanitize path for filename
       const sanitizedPath = agent.workDir.replace(/[/\\:]/g, '_').replace(/^_+/, '')
-      const logFileName = `${time}_${agent.name}_${sanitizedPath}.log`
+      const logFileName = `${time}_${agent.name}_${tabName}_${sanitizedPath}.log`
       const logPath = path.join(logDir, logFileName)
 
       const stream = fs.createWriteStream(logPath, { flags: 'a' })
@@ -148,6 +161,10 @@ export class AgentManager extends EventEmitter {
       branchName
     )
 
+    // Create default tab
+    const defaultTabId = uuidv4()
+    const defaultTab: TabInfo = { id: defaultTabId, name: DEFAULT_TAB_NAME, status: 'idle' }
+
     const agent: Agent = {
       id,
       name,
@@ -156,14 +173,18 @@ export class AgentManager extends EventEmitter {
       branch,
       status: 'idle',
       createdAt: Date.now(),
+      tabs: [defaultTab],
     }
 
-    this.agents.set(id, {
+    const tabs = new Map<string, TabProcess>()
+    tabs.set(defaultTabId, {
       pty: null,
-      agent,
+      info: defaultTab,
       outputBuffer: '',
       logStream: null,
     })
+
+    this.agents.set(id, { agent, tabs })
 
     // Persist agent for recovery
     savePersistedAgent({
@@ -180,20 +201,80 @@ export class AgentManager extends EventEmitter {
     return agent
   }
 
+  createTab(agentId: string, name?: string): TabInfo {
+    const agentProcess = this.agents.get(agentId)
+    if (!agentProcess) {
+      throw new Error(`Agent not found: ${agentId}`)
+    }
+
+    const tabId = uuidv4()
+    const tabName = name || `Terminal ${agentProcess.tabs.size + 1}`
+    const tabInfo: TabInfo = { id: tabId, name: tabName, status: 'idle' }
+
+    agentProcess.tabs.set(tabId, {
+      pty: null,
+      info: tabInfo,
+      outputBuffer: '',
+      logStream: null,
+    })
+
+    // Update agent tabs list
+    agentProcess.agent.tabs = Array.from(agentProcess.tabs.values()).map(t => t.info)
+
+    this.emit('tab-created', agentId, tabInfo)
+    this.emit('agents-updated', this.getAgents())
+
+    return tabInfo
+  }
+
+  closeTab(agentId: string, tabId: string): void {
+    const agentProcess = this.agents.get(agentId)
+    if (!agentProcess) {
+      throw new Error(`Agent not found: ${agentId}`)
+    }
+
+    const tabProcess = agentProcess.tabs.get(tabId)
+    if (!tabProcess) {
+      throw new Error(`Tab not found: ${tabId}`)
+    }
+
+    // Kill PTY if running
+    if (tabProcess.pty) {
+      tabProcess.pty.kill()
+    }
+
+    // Close log stream
+    if (tabProcess.logStream) {
+      tabProcess.logStream.end()
+    }
+
+    // Remove control
+    this.controlOwners.delete(this.getControlKey(agentId, tabId))
+
+    agentProcess.tabs.delete(tabId)
+
+    // Update agent tabs list
+    agentProcess.agent.tabs = Array.from(agentProcess.tabs.values()).map(t => t.info)
+
+    this.emit('tab-closed', agentId, tabId)
+    this.emit('agents-updated', this.getAgents())
+  }
+
   async deleteAgent(agentId: string): Promise<void> {
     const agentProcess = this.agents.get(agentId)
     if (!agentProcess) {
       throw new Error(`Agent not found: ${agentId}`)
     }
 
-    // Close log stream
-    if (agentProcess.logStream) {
-      agentProcess.logStream.end()
-    }
-
-    // Stop the agent if running
-    if (agentProcess.pty) {
-      agentProcess.pty.kill()
+    // Close all tabs
+    for (const [tabId, tabProcess] of agentProcess.tabs) {
+      if (tabProcess.logStream) {
+        tabProcess.logStream.end()
+      }
+      if (tabProcess.pty) {
+        tabProcess.pty.kill()
+      }
+      this.controlOwners.delete(this.getControlKey(agentId, tabId))
     }
 
     // Remove worktree
@@ -211,21 +292,37 @@ export class AgentManager extends EventEmitter {
   }
 
   getAgent(agentId: string): Agent | undefined {
-    return this.agents.get(agentId)?.agent
+    const agentProcess = this.agents.get(agentId)
+    if (!agentProcess) return undefined
+    // Ensure tabs are up to date
+    agentProcess.agent.tabs = Array.from(agentProcess.tabs.values()).map(t => t.info)
+    return agentProcess.agent
   }
 
   getAgents(): Agent[] {
-    return Array.from(this.agents.values()).map((p) => p.agent)
+    return Array.from(this.agents.values()).map(p => {
+      p.agent.tabs = Array.from(p.tabs.values()).map(t => t.info)
+      return p.agent
+    })
   }
 
-  startAgent(agentId: string, cols: number = 80, rows: number = 24): pty.IPty {
+  getTab(agentId: string, tabId: string): TabInfo | undefined {
+    return this.agents.get(agentId)?.tabs.get(tabId)?.info
+  }
+
+  startTab(agentId: string, tabId: string, cols: number = 80, rows: number = 24): pty.IPty {
     const agentProcess = this.agents.get(agentId)
     if (!agentProcess) {
       throw new Error(`Agent not found: ${agentId}`)
     }
 
-    if (agentProcess.pty) {
-      return agentProcess.pty
+    const tabProcess = agentProcess.tabs.get(tabId)
+    if (!tabProcess) {
+      throw new Error(`Tab not found: ${tabId}`)
+    }
+
+    if (tabProcess.pty) {
+      return tabProcess.pty
     }
 
     const shell = process.env.SHELL || '/bin/bash'
@@ -242,68 +339,79 @@ export class AgentManager extends EventEmitter {
       },
     })
 
-    agentProcess.pty = ptyProcess
-    agentProcess.agent.status = 'running'
-    // Don't reset outputBuffer - preserve history for new connections
+    tabProcess.pty = ptyProcess
+    tabProcess.info.status = 'running'
 
     // Create log stream when PTY starts
-    agentProcess.logStream = this.createLogStream(agentProcess.agent)
+    tabProcess.logStream = this.createLogStream(agentProcess.agent, tabProcess.info.name)
 
-    // Centralized PTY data handling
+    // Handle PTY data
     ptyProcess.onData((data) => {
-      // Store in buffer for history
-      agentProcess.outputBuffer += data
-      // Trim buffer if too large
-      if (agentProcess.outputBuffer.length > MAX_BUFFER_SIZE) {
-        agentProcess.outputBuffer = agentProcess.outputBuffer.slice(-MAX_BUFFER_SIZE)
+      tabProcess.outputBuffer += data
+      if (tabProcess.outputBuffer.length > MAX_BUFFER_SIZE) {
+        tabProcess.outputBuffer = tabProcess.outputBuffer.slice(-MAX_BUFFER_SIZE)
       }
 
-      // Write to log file
-      if (agentProcess.logStream) {
-        agentProcess.logStream.write(data)
+      if (tabProcess.logStream) {
+        tabProcess.logStream.write(data)
       }
 
-      this.emit('pty-data', agentId, data)
+      this.emit('pty-data', agentId, tabId, data)
     })
 
     ptyProcess.onExit(() => {
-      // Close log stream
-      if (agentProcess.logStream) {
-        agentProcess.logStream.end()
-        agentProcess.logStream = null
+      if (tabProcess.logStream) {
+        tabProcess.logStream.end()
+        tabProcess.logStream = null
       }
 
-      // Save output buffer for recovery
-      updatePersistedAgentBuffer(agentId, agentProcess.outputBuffer)
+      // Save output buffer for recovery (first tab only for now)
+      const firstTabId = agentProcess.tabs.keys().next().value
+      if (tabId === firstTabId) {
+        updatePersistedAgentBuffer(agentId, tabProcess.outputBuffer)
+      }
 
-      agentProcess.pty = null
-      agentProcess.agent.status = 'stopped'
-      this.emit('agent-status', agentId, 'stopped')
+      tabProcess.pty = null
+      tabProcess.info.status = 'stopped'
+      this.emit('tab-status', agentId, tabId, 'stopped')
     })
 
+    this.emit('tab-status', agentId, tabId, 'running')
+
+    // Update agent status
+    agentProcess.agent.status = 'running'
     this.emit('agent-status', agentId, 'running')
 
     return ptyProcess
   }
 
-  stopAgent(agentId: string): void {
+  stopTab(agentId: string, tabId: string): void {
     const agentProcess = this.agents.get(agentId)
-    if (!agentProcess || !agentProcess.pty) {
-      return
+    if (!agentProcess) return
+
+    const tabProcess = agentProcess.tabs.get(tabId)
+    if (!tabProcess || !tabProcess.pty) return
+
+    tabProcess.pty.kill()
+    tabProcess.pty = null
+    tabProcess.info.status = 'stopped'
+
+    this.emit('tab-status', agentId, tabId, 'stopped')
+
+    // Check if any tabs are still running
+    const anyRunning = Array.from(agentProcess.tabs.values()).some(t => t.info.status === 'running')
+    if (!anyRunning) {
+      agentProcess.agent.status = 'stopped'
+      this.emit('agent-status', agentId, 'stopped')
     }
-
-    agentProcess.pty.kill()
-    agentProcess.pty = null
-    agentProcess.agent.status = 'stopped'
-    this.emit('agent-status', agentId, 'stopped')
   }
 
-  getPty(agentId: string): pty.IPty | null {
-    return this.agents.get(agentId)?.pty || null
+  getPty(agentId: string, tabId: string): pty.IPty | null {
+    return this.agents.get(agentId)?.tabs.get(tabId)?.pty || null
   }
 
-  resizePty(agentId: string, cols: number, rows: number): void {
-    const ptyProcess = this.getPty(agentId)
+  resizePty(agentId: string, tabId: string, cols: number, rows: number): void {
+    const ptyProcess = this.getPty(agentId, tabId)
     if (ptyProcess) {
       ptyProcess.resize(cols, rows)
     }
@@ -368,20 +476,22 @@ export class AgentManager extends EventEmitter {
   shutdown(): void {
     console.log(`Stopping ${this.agents.size} agent(s)...`)
     for (const [agentId, agentProcess] of this.agents) {
-      // Save output buffer for recovery before stopping
-      if (agentProcess.outputBuffer) {
-        updatePersistedAgentBuffer(agentId, agentProcess.outputBuffer)
-      }
+      for (const [tabId, tabProcess] of agentProcess.tabs) {
+        // Save output buffer for first tab
+        const firstTabId = agentProcess.tabs.keys().next().value
+        if (tabId === firstTabId && tabProcess.outputBuffer) {
+          updatePersistedAgentBuffer(agentId, tabProcess.outputBuffer)
+        }
 
-      // Close log streams
-      if (agentProcess.logStream) {
-        agentProcess.logStream.end()
-      }
+        if (tabProcess.logStream) {
+          tabProcess.logStream.end()
+        }
 
-      if (agentProcess.pty) {
-        console.log(`Stopping agent ${agentId}`)
-        agentProcess.pty.kill()
-        agentProcess.pty = null
+        if (tabProcess.pty) {
+          console.log(`Stopping tab ${tabId} of agent ${agentId}`)
+          tabProcess.pty.kill()
+          tabProcess.pty = null
+        }
       }
     }
   }
