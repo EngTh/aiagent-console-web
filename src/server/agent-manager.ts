@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid'
 import * as path from 'path'
 import * as os from 'os'
 import * as fs from 'fs'
-import type { Agent, TabInfo, OutputChunk } from '../shared/types.js'
+import type { Agent, TabInfo, OutputChunk, BufferStats } from '../shared/types.js'
 import type { Config } from '../shared/config.js'
 import { GitWorktreeManager } from './git-worktree.js'
 import {
@@ -151,6 +151,23 @@ export class AgentManager extends EventEmitter {
     const agentProcess = this.agents.get(agentId)
     const tabProcess = agentProcess?.tabs.get(tabId)
     return tabProcess ? tabProcess.currentSeq - 1 : -1
+  }
+
+  // Get buffer statistics for a tab
+  getBufferStats(agentId: string, tabId: string): BufferStats {
+    const agentProcess = this.agents.get(agentId)
+    const tabProcess = agentProcess?.tabs.get(tabId)
+    if (!tabProcess || tabProcess.outputChunks.length === 0) {
+      return { chunkCount: 0, totalSize: 0, firstSeq: -1, lastSeq: -1 }
+    }
+
+    const totalSize = tabProcess.outputChunks.reduce((sum, c) => sum + c.data.length, 0)
+    return {
+      chunkCount: tabProcess.outputChunks.length,
+      totalSize,
+      firstSeq: tabProcess.outputChunks[0].seq,
+      lastSeq: tabProcess.currentSeq - 1,
+    }
   }
 
   // Get full output as string (for persistence)

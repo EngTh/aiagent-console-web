@@ -1,9 +1,10 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
-import type { WSClientMessage, WSServerMessage, Agent, TabInfo, OutputChunk } from '../../shared/types'
+import type { WSClientMessage, WSServerMessage, Agent, TabInfo, OutputChunk, BufferStats } from '../../shared/types'
 
 interface UseWebSocketOptions {
   onOutput: (data: string, tabId: string, seq: number) => void
   onOutputSync: (chunks: OutputChunk[], tabId: string, lastSeq: number) => void
+  onBufferStats: (agentId: string, tabId: string, stats: BufferStats) => void
   onAgentsUpdated: (agents: Agent[]) => void
   onAgentStatus: (agentId: string, status: Agent['status']) => void
   onTabStatus: (agentId: string, tabId: string, status: TabInfo['status']) => void
@@ -67,6 +68,9 @@ export function useWebSocket(options: UseWebSocketOptions) {
         break
       case 'output-sync':
         options.onOutputSync(message.chunks, message.tabId, message.lastSeq)
+        break
+      case 'buffer-stats':
+        options.onBufferStats(message.agentId, message.tabId, message.stats)
         break
       case 'attached':
         setAttachedAgentId(message.agentId)
@@ -148,6 +152,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
     send({ type: 'sync-output', agentId, tabId, fromSeq })
   }, [send])
 
+  const getBufferStats = useCallback((agentId: string, tabId: string) => {
+    send({ type: 'get-buffer-stats', agentId, tabId })
+  }, [send])
+
   useEffect(() => {
     connect()
     return () => {
@@ -173,5 +181,6 @@ export function useWebSocket(options: UseWebSocketOptions) {
     createTab,
     closeTab,
     syncOutput,
+    getBufferStats,
   }
 }

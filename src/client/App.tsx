@@ -8,7 +8,7 @@ import CreatePRDialog from './components/CreatePRDialog'
 import SettingsDialog from './components/SettingsDialog'
 import { useAgents } from './hooks/useAgents'
 import { useWebSocket } from './hooks/useWebSocket'
-import type { TabInfo, OutputChunk } from '../shared/types'
+import type { TabInfo, OutputChunk, BufferStats } from '../shared/types'
 import styles from './App.module.css'
 
 type SplitMode = 'none' | 'horizontal' | 'vertical'
@@ -37,6 +37,16 @@ function updateLastSeq(agentId: string, tabId: string, seq: number): void {
   }
 }
 
+function resetLastSeq(agentId: string, tabId: string): void {
+  lastSeqMap.delete(getSeqKey(agentId, tabId))
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes}B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+}
+
 export default function App() {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
@@ -50,6 +60,9 @@ export default function App() {
     { agentId: null, tabId: null },
     { agentId: null, tabId: null },
   ])
+
+  // Buffer stats per agentId:tabId
+  const [bufferStats, setBufferStats] = useState<Map<string, BufferStats>>(new Map())
 
   // Terminal refs for each panel
   const terminalRef0 = useRef<TerminalHandle>(null)
@@ -114,6 +127,15 @@ export default function App() {
     }
   }, [])
 
+  // Handle buffer stats update
+  const handleBufferStats = useCallback((agentId: string, tabId: string, stats: BufferStats) => {
+    setBufferStats(prev => {
+      const next = new Map(prev)
+      next.set(getSeqKey(agentId, tabId), stats)
+      return next
+    })
+  }, [])
+
   const handleError = useCallback((message: string) => {
     console.error('WebSocket error:', message)
   }, [])
@@ -153,9 +175,11 @@ export default function App() {
     createTab,
     closeTab,
     syncOutput,
+    getBufferStats,
   } = useWebSocket({
     onOutput: handleOutput,
     onOutputSync: handleOutputSync,
+    onBufferStats: handleBufferStats,
     onAgentsUpdated: updateAgents,
     onAgentStatus: updateAgentStatus,
     onTabStatus: handleTabStatus,
@@ -167,6 +191,18 @@ export default function App() {
   // Get current panel state
   const currentPanel = panels[activePanel]
   const selectedAgentId = currentPanel.agentId
+
+  // Request buffer stats periodically
+  useEffect(() => {
+    const interval = setInterval(() => {
+      for (const panel of panels) {
+        if (panel.agentId && panel.tabId) {
+          getBufferStats(panel.agentId, panel.tabId)
+        }
+      }
+    }, 2000)
+    return () => clearInterval(interval)
+  }, [panels, getBufferStats])
 
   const handleSelectAgent = useCallback((agentId: string, panelIndex?: number) => {
     const targetPanel = panelIndex ?? activePanel
@@ -183,9 +219,11 @@ export default function App() {
       // Use incremental sync if we have previous seq, otherwise get all
       const fromSeq = getLastSeq(agentId, firstTabId) + 1
       attach(agentId, firstTabId, fromSeq > 0 ? fromSeq : undefined)
+      // Request buffer stats
+      getBufferStats(agentId, firstTabId)
       setTimeout(() => terminalRefs[targetPanel].current?.focus(), 100)
     }
-  }, [agents, activePanel, attach])
+  }, [agents, activePanel, attach, getBufferStats])
 
   const handleSelectTab = useCallback((tabId: string, panelIndex?: number) => {
     const targetPanel = panelIndex ?? activePanel
@@ -201,8 +239,21 @@ export default function App() {
     // Use incremental sync if we have previous seq
     const fromSeq = getLastSeq(panel.agentId, tabId) + 1
     attach(panel.agentId, tabId, fromSeq > 0 ? fromSeq : undefined)
+    // Request buffer stats
+    getBufferStats(panel.agentId, tabId)
     setTimeout(() => terminalRefs[targetPanel].current?.focus(), 100)
-  }, [panels, activePanel, attach])
+  }, [panels, activePanel, attach, getBufferStats])
+
+  // Reload terminal content from beginning
+  const handleReload = useCallback((panelIndex: number) => {
+    const panel = panels[panelIndex]
+    if (!panel.agentId || !panel.tabId) return
+
+    // Reset local seq tracking
+    resetLastSeq(panel.agentId, panel.tabId)
+    // Request all content from server (fromSeq = 0)
+    attach(panel.agentId, panel.tabId, 0)
+  }, [panels, attach])
 
   const handleCreateTab = useCallback((panelIndex?: number) => {
     const targetPanel = panelIndex ?? activePanel
@@ -293,6 +344,14 @@ export default function App() {
     const tabs = agent?.tabs || []
     const terminalRef = terminalRefs[panelIndex]
 
+    // Get buffer stats for this panel
+    const stats = panel.agentId && panel.tabId
+      ? bufferStats.get(getSeqKey(panel.agentId, panel.tabId))
+      : null
+    const localSeq = panel.agentId && panel.tabId
+      ? getLastSeq(panel.agentId, panel.tabId)
+      : -1
+
     if (!agent) {
       return (
         <div
@@ -316,6 +375,28 @@ export default function App() {
           <div className={styles.agentInfo}>
             <span className={styles.agentName}>{agent.name}</span>
             <span className={styles.agentPath}>{agent.workDir}</span>
+          </div>
+          <div className={styles.bufferInfo}>
+            {stats && (
+              <>
+                <span className={styles.bufferStat}>
+                  Server: {formatBytes(stats.totalSize)} ({stats.chunkCount} chunks, seq {stats.firstSeq}-{stats.lastSeq})
+                </span>
+                <span className={styles.bufferStat}>
+                  Local: seq {localSeq}
+                </span>
+                <button
+                  className={styles.reloadBtn}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleReload(panelIndex)
+                  }}
+                  title="Reload all content from server"
+                >
+                  ↻ Reload
+                </button>
+              </>
+            )}
           </div>
           {isActive && (
             <div className={styles.controlStatus}>

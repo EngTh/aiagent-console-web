@@ -31,6 +31,14 @@ export interface OutputChunk {
   timestamp: number
 }
 
+// Buffer statistics for debugging/display
+export interface BufferStats {
+  chunkCount: number
+  totalSize: number
+  firstSeq: number
+  lastSeq: number
+}
+
 // Response for output sync API
 export interface OutputSyncResponse {
   chunks: OutputChunk[]
@@ -50,6 +58,7 @@ export type WSClientMessage =
   | { type: 'create-tab'; agentId: string; name?: string }
   | { type: 'close-tab'; agentId: string; tabId: string }
   | { type: 'sync-output'; agentId: string; tabId: string; fromSeq: number }
+  | { type: 'get-buffer-stats'; agentId: string; tabId: string }
 
 export type WSServerMessage =
   | { type: 'output'; data: string; tabId?: string; seq: number }
@@ -63,3 +72,4 @@ export type WSServerMessage =
   | { type: 'error'; message: string }
   | { type: 'agents-updated'; agents: Agent[] }
   | { type: 'control-changed'; hasControl: boolean }
+  | { type: 'buffer-stats'; agentId: string; tabId: string; stats: BufferStats }
