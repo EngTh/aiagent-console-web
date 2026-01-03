@@ -123,6 +123,20 @@ app.post('/api/agents/:id/pr', async (req, res) => {
   }
 })
 
+// Try local merge for an agent
+app.post('/api/agents/:id/merge', async (req, res) => {
+  try {
+    const { targetBranch } = req.body
+    const result = await agentManager.tryLocalMerge(req.params.id, targetBranch)
+    res.json(result)
+  } catch (error) {
+    console.error('Failed to merge:', error)
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to merge',
+    })
+  }
+})
+
 // Recent repos API
 app.get('/api/recent-repos', (_req, res) => {
   res.json({ repos: getRecentRepos() })

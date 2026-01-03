@@ -87,6 +87,28 @@ export default function App() {
     alert(`PR created: ${prUrl}`)
   }, [createPR, prDialogAgentId])
 
+  const handleMerge = useCallback(async (agentId: string) => {
+    try {
+      const response = await fetch(`/api/agents/${agentId}/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const result = await response.json()
+
+      if (result.success) {
+        alert(`✅ ${result.message}`)
+      } else {
+        const conflictInfo = result.conflicts?.length
+          ? `\n\nConflicting files:\n${result.conflicts.join('\n')}`
+          : ''
+        alert(`⚠️ ${result.message}${conflictInfo}\n\nYou can manually merge branch '${result.branch}' into '${result.targetBranch}'.`)
+      }
+    } catch (error) {
+      alert(`Failed to merge: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }, [])
+
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
   const prDialogAgent = agents.find((a) => a.id === prDialogAgentId)
 
@@ -108,6 +130,7 @@ export default function App() {
         onCreateAgent={() => setShowCreateDialog(true)}
         onDeleteAgent={handleDeleteAgent}
         onCreatePR={(agentId) => setPRDialogAgentId(agentId)}
+        onMerge={handleMerge}
         onOpenSettings={() => setShowSettingsDialog(true)}
       />
 

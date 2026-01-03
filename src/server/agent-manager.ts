@@ -283,6 +283,18 @@ export class AgentManager extends EventEmitter {
     return this.worktreeManager.getDiff(agentProcess.agent.workDir)
   }
 
+  async tryLocalMerge(
+    agentId: string,
+    targetBranch?: string
+  ): Promise<{ success: boolean; message: string; branch: string; targetBranch: string; conflicts?: string[] }> {
+    const agentProcess = this.agents.get(agentId)
+    if (!agentProcess) {
+      throw new Error(`Agent not found: ${agentId}`)
+    }
+
+    return this.worktreeManager.tryLocalMerge(agentProcess.agent.workDir, targetBranch)
+  }
+
   // Update config at runtime
   updateConfig(newConfig: Partial<Config>): void {
     this.config = { ...this.config, ...newConfig }

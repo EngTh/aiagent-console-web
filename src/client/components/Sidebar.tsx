@@ -9,6 +9,7 @@ interface SidebarProps {
   onCreateAgent: () => void
   onDeleteAgent: (agentId: string) => void
   onCreatePR: (agentId: string) => void
+  onMerge: (agentId: string) => void
   onOpenSettings: () => void
 }
 
@@ -19,6 +20,7 @@ export default function Sidebar({
   onCreateAgent,
   onDeleteAgent,
   onCreatePR,
+  onMerge,
   onOpenSettings,
 }: SidebarProps) {
   const [contextMenu, setContextMenu] = useState<{
@@ -112,11 +114,20 @@ export default function Sidebar({
           <button
             className={styles.contextMenuItem}
             onClick={() => {
+              onMerge(contextMenu.agentId)
+              closeContextMenu()
+            }}
+          >
+            Merge to Main
+          </button>
+          <button
+            className={styles.contextMenuItem}
+            onClick={() => {
               onCreatePR(contextMenu.agentId)
               closeContextMenu()
             }}
           >
-            Create PR
+            Create PR (GitHub)
           </button>
           <button
             className={`${styles.contextMenuItem} ${styles.danger}`}
