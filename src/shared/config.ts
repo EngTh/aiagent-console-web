@@ -7,7 +7,7 @@ export interface Config {
 }
 
 const DEFAULT_CONFIG: Config = {
-  port: 3000,
+  port: 17930,
   vitePort: 5173,
 }
 
