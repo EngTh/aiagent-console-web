@@ -4,14 +4,14 @@
     "lib": ["ES2022"],
     "module": "ESNext",
     "moduleResolution": "node",
-    "outDir": "./dist/server",
-    "rootDir": "./src/server",
+    "outDir": "./dist",
+    "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true
   },
-  "include": ["src/server/**/*"],
+  "include": ["src/server/**/*", "src/shared/**/*"],
   "exclude": ["node_modules"]
 }
