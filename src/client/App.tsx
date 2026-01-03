@@ -34,9 +34,11 @@ export default function App() {
   const {
     connected,
     attachedAgentId,
+    hasControl,
     attach,
     sendInput,
     resize,
+    gainControl,
   } = useWebSocket({
     onOutput: handleOutput,
     onAgentsUpdated: updateAgents,
@@ -107,12 +109,28 @@ export default function App() {
               <span className={styles.noAgent}>Select an agent to start</span>
             )}
           </div>
-          <div className={styles.connectionStatus}>
-            <span
-              className={styles.statusDot}
-              style={{ background: connected ? 'var(--success)' : 'var(--danger)' }}
-            />
-            {connected ? 'Connected' : 'Disconnected'}
+          <div className={styles.headerRight}>
+            {selectedAgentId && (
+              <div className={styles.controlStatus}>
+                {hasControl ? (
+                  <span className={styles.controlLabel}>In Control</span>
+                ) : (
+                  <>
+                    <span className={styles.viewOnlyLabel}>View Only</span>
+                    <button className={styles.gainControlBtn} onClick={gainControl}>
+                      Gain Control
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            <div className={styles.connectionStatus}>
+              <span
+                className={styles.statusDot}
+                style={{ background: connected ? 'var(--success)' : 'var(--danger)' }}
+              />
+              {connected ? 'Connected' : 'Disconnected'}
+            </div>
           </div>
         </div>
 

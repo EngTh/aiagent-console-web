@@ -12,6 +12,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null)
   const [connected, setConnected] = useState(false)
   const [attachedAgentId, setAttachedAgentId] = useState<string | null>(null)
+  const [hasControl, setHasControl] = useState(false)
   const reconnectTimeoutRef = useRef<number>()
 
   const connect = useCallback(() => {
@@ -27,6 +28,7 @@ export function useWebSocket(options: UseWebSocketOptions) {
       console.log('WebSocket disconnected')
       setConnected(false)
       setAttachedAgentId(null)
+      setHasControl(false)
 
       // Reconnect after 2 seconds
       reconnectTimeoutRef.current = window.setTimeout(() => {
@@ -57,15 +59,20 @@ export function useWebSocket(options: UseWebSocketOptions) {
         break
       case 'attached':
         setAttachedAgentId(message.agentId)
+        setHasControl(message.hasControl)
         break
       case 'detached':
         setAttachedAgentId(null)
+        setHasControl(false)
         break
       case 'agents-updated':
         options.onAgentsUpdated(message.agents)
         break
       case 'agent-status':
         options.onAgentStatus(message.agentId, message.status)
+        break
+      case 'control-changed':
+        setHasControl(message.hasControl)
         break
       case 'error':
         options.onError(message.message)
@@ -103,6 +110,10 @@ export function useWebSocket(options: UseWebSocketOptions) {
     send({ type: 'stop', agentId })
   }, [send])
 
+  const gainControl = useCallback(() => {
+    send({ type: 'gain-control' })
+  }, [send])
+
   useEffect(() => {
     connect()
     return () => {
@@ -116,11 +127,13 @@ export function useWebSocket(options: UseWebSocketOptions) {
   return {
     connected,
     attachedAgentId,
+    hasControl,
     attach,
     detach,
     sendInput,
     resize,
     startAgent,
     stopAgent,
+    gainControl,
   }
 }

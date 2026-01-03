@@ -1,23 +1,28 @@
 import { WebSocket } from 'ws'
+import { v4 as uuidv4 } from 'uuid'
 import type { WSClientMessage, WSServerMessage } from '../shared/types.js'
 import type { AgentManager } from './agent-manager.js'
 
 export class WSHandler {
   private ws: WebSocket
   private agentManager: AgentManager
+  private clientId: string
   private attachedAgentId: string | null = null
   private boundPtyDataHandler: (agentId: string, data: string) => void
   private boundAgentsUpdatedHandler: (agents: unknown[]) => void
   private boundAgentStatusHandler: (agentId: string, status: string) => void
+  private boundControlChangedHandler: (agentId: string, newOwnerId: string | null) => void
 
   constructor(ws: WebSocket, agentManager: AgentManager) {
     this.ws = ws
     this.agentManager = agentManager
+    this.clientId = uuidv4()
 
     // Bind handlers so we can remove them later
     this.boundPtyDataHandler = this.handlePtyData.bind(this)
     this.boundAgentsUpdatedHandler = this.handleAgentsUpdated.bind(this)
     this.boundAgentStatusHandler = this.handleAgentStatus.bind(this)
+    this.boundControlChangedHandler = this.handleControlChanged.bind(this)
 
     this.setupEventListeners()
   }
@@ -40,6 +45,7 @@ export class WSHandler {
     this.agentManager.on('agents-updated', this.boundAgentsUpdatedHandler)
     this.agentManager.on('agent-status', this.boundAgentStatusHandler)
     this.agentManager.on('pty-data', this.boundPtyDataHandler)
+    this.agentManager.on('control-changed', this.boundControlChangedHandler)
   }
 
   private handlePtyData(agentId: string, data: string): void {
@@ -55,6 +61,14 @@ export class WSHandler {
 
   private handleAgentStatus(agentId: string, status: string): void {
     this.send({ type: 'agent-status', agentId, status } as WSServerMessage)
+  }
+
+  private handleControlChanged(agentId: string, newOwnerId: string | null): void {
+    // Only notify if this client is attached to this agent
+    if (this.attachedAgentId === agentId) {
+      const hasControl = newOwnerId === this.clientId
+      this.send({ type: 'control-changed', hasControl })
+    }
   }
 
   private handleMessage(message: WSClientMessage): void {
@@ -77,12 +91,16 @@ export class WSHandler {
       case 'stop':
         this.stopAgent(message.agentId)
         break
+      case 'gain-control':
+        this.gainControl()
+        break
     }
   }
 
   private attachToAgent(agentId: string): void {
-    // Detach from current agent if attached
+    // Release control from previous agent if attached
     if (this.attachedAgentId) {
+      this.agentManager.releaseControl(this.attachedAgentId, this.clientId)
       this.attachedAgentId = null
     }
 
@@ -100,17 +118,40 @@ export class WSHandler {
       this.agentManager.startAgent(agentId)
     }
 
-    this.send({ type: 'attached', agentId })
+    // Try to gain control if no one has it
+    const currentOwner = this.agentManager.getControlOwner(agentId)
+    let hasControl = false
+    if (!currentOwner) {
+      this.agentManager.tryGainControl(agentId, this.clientId)
+      hasControl = true
+    }
+
+    this.send({ type: 'attached', agentId, hasControl })
   }
 
   private detachFromAgent(): void {
     if (!this.attachedAgentId) return
+
+    // Release control when detaching
+    this.agentManager.releaseControl(this.attachedAgentId, this.clientId)
     this.attachedAgentId = null
     this.send({ type: 'detached' })
   }
 
+  private gainControl(): void {
+    if (!this.attachedAgentId) return
+
+    this.agentManager.tryGainControl(this.attachedAgentId, this.clientId)
+    // control-changed event will notify all clients
+  }
+
   private handleInput(data: string): void {
     if (!this.attachedAgentId) return
+
+    // Only allow input if this client has control
+    if (!this.agentManager.hasControl(this.attachedAgentId, this.clientId)) {
+      return // Silently ignore input from non-controlling clients
+    }
 
     const pty = this.agentManager.getPty(this.attachedAgentId)
     if (pty) {
@@ -120,6 +161,10 @@ export class WSHandler {
 
   private handleResize(cols: number, rows: number): void {
     if (!this.attachedAgentId) return
+    // Only allow resize if this client has control
+    if (!this.agentManager.hasControl(this.attachedAgentId, this.clientId)) {
+      return
+    }
     this.agentManager.resizePty(this.attachedAgentId, cols, rows)
   }
 
@@ -145,10 +190,16 @@ export class WSHandler {
   }
 
   private cleanup(): void {
+    // Release control when connection closes
+    if (this.attachedAgentId) {
+      this.agentManager.releaseControl(this.attachedAgentId, this.clientId)
+    }
+
     // Remove all event listeners
     this.agentManager.off('agents-updated', this.boundAgentsUpdatedHandler)
     this.agentManager.off('agent-status', this.boundAgentStatusHandler)
     this.agentManager.off('pty-data', this.boundPtyDataHandler)
+    this.agentManager.off('control-changed', this.boundControlChangedHandler)
     this.attachedAgentId = null
   }
 }
