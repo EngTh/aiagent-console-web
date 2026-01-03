@@ -15,7 +15,7 @@ const app = express()
 const server = createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
 
-const agentManager = new AgentManager()
+const agentManager = new AgentManager(config)
 
 // Middleware
 app.use(express.json())
@@ -114,6 +114,23 @@ app.post('/api/agents/:id/pr', async (req, res) => {
     console.error('Failed to create PR:', error)
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to create PR',
+    })
+  }
+})
+
+// Settings API
+app.get('/api/settings', (_req, res) => {
+  res.json(agentManager.getConfig())
+})
+
+app.put('/api/settings', (req, res) => {
+  try {
+    const { logDir, logEnabled } = req.body
+    agentManager.updateConfig({ logDir, logEnabled })
+    res.json(agentManager.getConfig())
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to update settings',
     })
   }
 })

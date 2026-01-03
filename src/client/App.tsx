@@ -3,6 +3,7 @@ import Sidebar from './components/Sidebar'
 import Terminal, { TerminalHandle } from './components/Terminal'
 import CreateAgentDialog from './components/CreateAgentDialog'
 import CreatePRDialog from './components/CreatePRDialog'
+import SettingsDialog from './components/SettingsDialog'
 import { useAgents } from './hooks/useAgents'
 import { useWebSocket } from './hooks/useWebSocket'
 import styles from './App.module.css'
@@ -10,6 +11,7 @@ import styles from './App.module.css'
 export default function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [prDialogAgentId, setPRDialogAgentId] = useState<string | null>(null)
   const terminalRef = useRef<TerminalHandle>(null)
 
@@ -95,6 +97,7 @@ export default function App() {
         onCreateAgent={() => setShowCreateDialog(true)}
         onDeleteAgent={handleDeleteAgent}
         onCreatePR={(agentId) => setPRDialogAgentId(agentId)}
+        onOpenSettings={() => setShowSettingsDialog(true)}
       />
 
       <div className={styles.main}>
@@ -163,6 +166,11 @@ export default function App() {
         agentName={prDialogAgent?.name || ''}
         onClose={() => setPRDialogAgentId(null)}
         onCreate={handleCreatePR}
+      />
+
+      <SettingsDialog
+        isOpen={showSettingsDialog}
+        onClose={() => setShowSettingsDialog(false)}
       />
     </div>
   )

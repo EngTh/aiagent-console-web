@@ -9,6 +9,7 @@ interface SidebarProps {
   onCreateAgent: () => void
   onDeleteAgent: (agentId: string) => void
   onCreatePR: (agentId: string) => void
+  onOpenSettings: () => void
 }
 
 export default function Sidebar({
@@ -18,6 +19,7 @@ export default function Sidebar({
   onCreateAgent,
   onDeleteAgent,
   onCreatePR,
+  onOpenSettings,
 }: SidebarProps) {
   const [contextMenu, setContextMenu] = useState<{
     agentId: string
@@ -93,6 +95,12 @@ export default function Sidebar({
             </div>
           ))
         )}
+      </div>
+
+      <div className={styles.footer}>
+        <button className={styles.settingsButton} onClick={onOpenSettings} title="Settings">
+          ⚙
+        </button>
       </div>
 
       {contextMenu && (

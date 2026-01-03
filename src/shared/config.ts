@@ -4,11 +4,15 @@ import { join } from 'path'
 export interface Config {
   port: number
   vitePort: number
+  logDir?: string // Directory to save terminal logs
+  logEnabled?: boolean // Enable terminal logging
 }
 
 const DEFAULT_CONFIG: Config = {
   port: 17930,
   vitePort: 5173,
+  logDir: '',
+  logEnabled: false,
 }
 
 export function loadConfig(): Config {

@@ -127,6 +127,12 @@ export class WSHandler {
     }
 
     this.send({ type: 'attached', agentId, hasControl })
+
+    // Send history output so new connections can see previous terminal content
+    const history = this.agentManager.getOutputHistory(agentId)
+    if (history) {
+      this.send({ type: 'output', data: history })
+    }
   }
 
   private detachFromAgent(): void {

@@ -3,22 +3,29 @@ import { EventEmitter } from 'events'
 import { v4 as uuidv4 } from 'uuid'
 import * as path from 'path'
 import * as os from 'os'
+import * as fs from 'fs'
 import type { Agent } from '../shared/types.js'
+import type { Config } from '../shared/config.js'
 import { GitWorktreeManager } from './git-worktree.js'
+
+const MAX_BUFFER_SIZE = 100000 // ~100KB of history per agent
 
 interface AgentProcess {
   pty: pty.IPty | null
   agent: Agent
+  outputBuffer: string // Store recent output for new connections
+  logStream: fs.WriteStream | null // Log file stream
 }
 
 export class AgentManager extends EventEmitter {
   private agents: Map<string, AgentProcess> = new Map()
   private worktreeManager: GitWorktreeManager
-  // Track which client has control of each agent (agentId -> clientId)
   private controlOwners: Map<string, string> = new Map()
+  private config: Config
 
-  constructor() {
+  constructor(config: Config) {
     super()
+    this.config = config
     const baseWorkDir = path.join(os.homedir(), '.aiagent-console', 'worktrees')
     this.worktreeManager = new GitWorktreeManager(baseWorkDir)
   }
@@ -35,12 +42,10 @@ export class AgentManager extends EventEmitter {
   tryGainControl(agentId: string, clientId: string): boolean {
     const currentOwner = this.controlOwners.get(agentId)
     if (!currentOwner) {
-      // No owner, grant control
       this.controlOwners.set(agentId, clientId)
       this.emit('control-changed', agentId, clientId)
       return true
     }
-    // Take control from current owner
     this.controlOwners.set(agentId, clientId)
     this.emit('control-changed', agentId, clientId)
     return true
@@ -53,11 +58,47 @@ export class AgentManager extends EventEmitter {
     }
   }
 
+  // Get output history for a specific agent
+  getOutputHistory(agentId: string): string {
+    const agentProcess = this.agents.get(agentId)
+    return agentProcess?.outputBuffer || ''
+  }
+
+  // Create log file for an agent
+  private createLogStream(agent: Agent): fs.WriteStream | null {
+    if (!this.config.logEnabled || !this.config.logDir) {
+      return null
+    }
+
+    try {
+      // Create log directory structure: logDir/YYYY-MM/DD/
+      const now = new Date()
+      const year = now.getFullYear()
+      const month = String(now.getMonth() + 1).padStart(2, '0')
+      const day = String(now.getDate()).padStart(2, '0')
+      const time = `${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}`
+
+      const logDir = path.join(this.config.logDir, `${year}-${month}`, day)
+      fs.mkdirSync(logDir, { recursive: true })
+
+      // Sanitize path for filename
+      const sanitizedPath = agent.workDir.replace(/[/\\:]/g, '_').replace(/^_+/, '')
+      const logFileName = `${time}_${agent.name}_${sanitizedPath}.log`
+      const logPath = path.join(logDir, logFileName)
+
+      const stream = fs.createWriteStream(logPath, { flags: 'a' })
+      console.log(`Logging to: ${logPath}`)
+      return stream
+    } catch (error) {
+      console.error('Failed to create log file:', error)
+      return null
+    }
+  }
+
   async createAgent(name: string, sourceRepo: string): Promise<Agent> {
     const id = uuidv4()
     const branchName = `agent/${id.slice(0, 8)}`
 
-    // Create worktree
     const { worktreePath, branch } = await this.worktreeManager.createWorktree(
       sourceRepo,
       id,
@@ -74,7 +115,12 @@ export class AgentManager extends EventEmitter {
       createdAt: Date.now(),
     }
 
-    this.agents.set(id, { pty: null, agent })
+    this.agents.set(id, {
+      pty: null,
+      agent,
+      outputBuffer: '',
+      logStream: null,
+    })
     this.emit('agents-updated', this.getAgents())
 
     return agent
@@ -84,6 +130,11 @@ export class AgentManager extends EventEmitter {
     const agentProcess = this.agents.get(agentId)
     if (!agentProcess) {
       throw new Error(`Agent not found: ${agentId}`)
+    }
+
+    // Close log stream
+    if (agentProcess.logStream) {
+      agentProcess.logStream.end()
     }
 
     // Stop the agent if running
@@ -109,18 +160,13 @@ export class AgentManager extends EventEmitter {
     return Array.from(this.agents.values()).map((p) => p.agent)
   }
 
-  startAgent(
-    agentId: string,
-    cols: number = 80,
-    rows: number = 24
-  ): pty.IPty {
+  startAgent(agentId: string, cols: number = 80, rows: number = 24): pty.IPty {
     const agentProcess = this.agents.get(agentId)
     if (!agentProcess) {
       throw new Error(`Agent not found: ${agentId}`)
     }
 
     if (agentProcess.pty) {
-      // Already running, return existing pty
       return agentProcess.pty
     }
 
@@ -140,13 +186,35 @@ export class AgentManager extends EventEmitter {
 
     agentProcess.pty = ptyProcess
     agentProcess.agent.status = 'running'
+    agentProcess.outputBuffer = ''
 
-    // Centralized PTY data handling - emit to all listeners
+    // Create log stream when PTY starts
+    agentProcess.logStream = this.createLogStream(agentProcess.agent)
+
+    // Centralized PTY data handling
     ptyProcess.onData((data) => {
+      // Store in buffer for history
+      agentProcess.outputBuffer += data
+      // Trim buffer if too large
+      if (agentProcess.outputBuffer.length > MAX_BUFFER_SIZE) {
+        agentProcess.outputBuffer = agentProcess.outputBuffer.slice(-MAX_BUFFER_SIZE)
+      }
+
+      // Write to log file
+      if (agentProcess.logStream) {
+        agentProcess.logStream.write(data)
+      }
+
       this.emit('pty-data', agentId, data)
     })
 
     ptyProcess.onExit(() => {
+      // Close log stream
+      if (agentProcess.logStream) {
+        agentProcess.logStream.end()
+        agentProcess.logStream = null
+      }
+
       agentProcess.pty = null
       agentProcess.agent.status = 'stopped'
       this.emit('agent-status', agentId, 'stopped')
@@ -215,9 +283,23 @@ export class AgentManager extends EventEmitter {
     return this.worktreeManager.getDiff(agentProcess.agent.workDir)
   }
 
+  // Update config at runtime
+  updateConfig(newConfig: Partial<Config>): void {
+    this.config = { ...this.config, ...newConfig }
+  }
+
+  getConfig(): Config {
+    return { ...this.config }
+  }
+
   shutdown(): void {
     console.log(`Stopping ${this.agents.size} agent(s)...`)
     for (const [agentId, agentProcess] of this.agents) {
+      // Close log streams
+      if (agentProcess.logStream) {
+        agentProcess.logStream.end()
+      }
+
       if (agentProcess.pty) {
         console.log(`Stopping agent ${agentId}`)
         agentProcess.pty.kill()
