@@ -18,14 +18,14 @@ interface SettingsDialogProps {
 }
 
 const FONT_OPTIONS = [
-  'Menlo, Monaco, "Courier New", monospace',
+  '"Maple Mono NF CN", monospace',
   'JetBrains Mono, monospace',
   'Fira Code, monospace',
+  'Menlo, Monaco, "Courier New", monospace',
   'Source Code Pro, monospace',
   'Cascadia Code, monospace',
   'SF Mono, monospace',
   'Consolas, monospace',
-  'Monaco, monospace',
 ]
 
 export default function SettingsDialog({

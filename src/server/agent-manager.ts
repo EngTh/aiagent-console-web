@@ -7,6 +7,13 @@ import * as fs from 'fs'
 import type { Agent } from '../shared/types.js'
 import type { Config } from '../shared/config.js'
 import { GitWorktreeManager } from './git-worktree.js'
+import {
+  getPersistedAgents,
+  savePersistedAgent,
+  removePersistedAgent,
+  updatePersistedAgentBuffer,
+  type PersistedAgent,
+} from './local-config.js'
 
 const MAX_BUFFER_SIZE = 100000 // ~100KB of history per agent
 
@@ -28,6 +35,42 @@ export class AgentManager extends EventEmitter {
     this.config = config
     const baseWorkDir = path.join(os.homedir(), '.aiagent-console', 'worktrees')
     this.worktreeManager = new GitWorktreeManager(baseWorkDir)
+
+    // Load persisted agents on startup
+    this.loadPersistedAgents()
+  }
+
+  private loadPersistedAgents(): void {
+    const persisted = getPersistedAgents()
+    console.log(`Loading ${persisted.length} persisted agent(s)...`)
+
+    for (const pa of persisted) {
+      // Check if worktree still exists
+      if (!fs.existsSync(pa.workDir)) {
+        console.log(`Worktree for agent ${pa.name} no longer exists, removing...`)
+        removePersistedAgent(pa.id)
+        continue
+      }
+
+      const agent: Agent = {
+        id: pa.id,
+        name: pa.name,
+        sourceRepo: pa.sourceRepo,
+        workDir: pa.workDir,
+        branch: pa.branch,
+        status: 'idle',
+        createdAt: pa.createdAt,
+      }
+
+      this.agents.set(pa.id, {
+        pty: null,
+        agent,
+        outputBuffer: pa.outputBuffer || '',
+        logStream: null,
+      })
+
+      console.log(`Loaded agent: ${pa.name} (${pa.id})`)
+    }
   }
 
   // Control management
@@ -121,6 +164,17 @@ export class AgentManager extends EventEmitter {
       outputBuffer: '',
       logStream: null,
     })
+
+    // Persist agent for recovery
+    savePersistedAgent({
+      id: agent.id,
+      name: agent.name,
+      sourceRepo: agent.sourceRepo,
+      workDir: agent.workDir,
+      branch: agent.branch,
+      createdAt: agent.createdAt,
+    })
+
     this.emit('agents-updated', this.getAgents())
 
     return agent
@@ -149,6 +203,10 @@ export class AgentManager extends EventEmitter {
     )
 
     this.agents.delete(agentId)
+
+    // Remove from persistence
+    removePersistedAgent(agentId)
+
     this.emit('agents-updated', this.getAgents())
   }
 
@@ -186,7 +244,7 @@ export class AgentManager extends EventEmitter {
 
     agentProcess.pty = ptyProcess
     agentProcess.agent.status = 'running'
-    agentProcess.outputBuffer = ''
+    // Don't reset outputBuffer - preserve history for new connections
 
     // Create log stream when PTY starts
     agentProcess.logStream = this.createLogStream(agentProcess.agent)
@@ -214,6 +272,9 @@ export class AgentManager extends EventEmitter {
         agentProcess.logStream.end()
         agentProcess.logStream = null
       }
+
+      // Save output buffer for recovery
+      updatePersistedAgentBuffer(agentId, agentProcess.outputBuffer)
 
       agentProcess.pty = null
       agentProcess.agent.status = 'stopped'
@@ -307,6 +368,11 @@ export class AgentManager extends EventEmitter {
   shutdown(): void {
     console.log(`Stopping ${this.agents.size} agent(s)...`)
     for (const [agentId, agentProcess] of this.agents) {
+      // Save output buffer for recovery before stopping
+      if (agentProcess.outputBuffer) {
+        updatePersistedAgentBuffer(agentId, agentProcess.outputBuffer)
+      }
+
       // Close log streams
       if (agentProcess.logStream) {
         agentProcess.logStream.end()
