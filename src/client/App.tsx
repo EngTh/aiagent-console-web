@@ -18,6 +18,28 @@ interface PanelState {
   tabId: string | null
 }
 
+// Client-side output buffer storage
+const outputBuffers = new Map<string, string>()
+const MAX_BUFFER_SIZE = 100000
+
+function getBufferKey(agentId: string, tabId: string): string {
+  return `${agentId}:${tabId}`
+}
+
+function appendToBuffer(agentId: string, tabId: string, data: string): void {
+  const key = getBufferKey(agentId, tabId)
+  const current = outputBuffers.get(key) || ''
+  let newBuffer = current + data
+  if (newBuffer.length > MAX_BUFFER_SIZE) {
+    newBuffer = newBuffer.slice(-MAX_BUFFER_SIZE)
+  }
+  outputBuffers.set(key, newBuffer)
+}
+
+function getBuffer(agentId: string, tabId: string): string {
+  return outputBuffers.get(getBufferKey(agentId, tabId)) || ''
+}
+
 export default function App() {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
@@ -36,6 +58,10 @@ export default function App() {
   const terminalRef0 = useRef<TerminalHandle>(null)
   const terminalRef1 = useRef<TerminalHandle>(null)
   const terminalRefs = [terminalRef0, terminalRef1]
+
+  // Track what each panel is currently displaying to route output correctly
+  const panelsRef = useRef(panels)
+  panelsRef.current = panels
 
   // Fetch terminal settings on mount
   useEffect(() => {
@@ -58,10 +84,22 @@ export default function App() {
   } = useAgents()
 
   const handleOutput = useCallback((data: string, tabId?: string) => {
-    // Route output to correct terminal based on attached tab
-    const terminalRef = terminalRefs[activePanel]
-    terminalRef.current?.write(data)
-  }, [activePanel])
+    // Store in buffer and route to ALL panels showing this agent:tab
+    const currentPanels = panelsRef.current
+
+    // Find which panels are showing this content
+    for (let i = 0; i < 2; i++) {
+      const panel = currentPanels[i]
+      if (panel.agentId && panel.tabId) {
+        // Check if this output matches this panel's agent:tab
+        // The output comes with tabId, we need to check if any panel is showing this
+        if (tabId && panel.tabId === tabId) {
+          appendToBuffer(panel.agentId, panel.tabId, data)
+          terminalRefs[i].current?.write(data)
+        }
+      }
+    }
+  }, [])
 
   const handleError = useCallback((message: string) => {
     console.error('WebSocket error:', message)
@@ -115,6 +153,16 @@ export default function App() {
   const currentPanel = panels[activePanel]
   const selectedAgentId = currentPanel.agentId
 
+  // Restore buffer content when panel changes
+  const restoreBufferToTerminal = useCallback((panelIndex: number, agentId: string, tabId: string) => {
+    const terminalRef = terminalRefs[panelIndex]
+    const buffer = getBuffer(agentId, tabId)
+    terminalRef.current?.clear()
+    if (buffer) {
+      terminalRef.current?.write(buffer)
+    }
+  }, [])
+
   const handleSelectAgent = useCallback((agentId: string, panelIndex?: number) => {
     const targetPanel = panelIndex ?? activePanel
     const agent = agents.find(a => a.id === agentId)
@@ -126,39 +174,42 @@ export default function App() {
       return newPanels
     })
 
-    if (targetPanel === activePanel) {
-      const terminalRef = terminalRefs[activePanel]
-      terminalRef.current?.clear()
-      attach(agentId, firstTabId || undefined)
-      setTimeout(() => terminalRef.current?.focus(), 100)
+    if (targetPanel === activePanel && firstTabId) {
+      // Restore buffer content instead of clearing
+      restoreBufferToTerminal(targetPanel, agentId, firstTabId)
+      attach(agentId, firstTabId)
+      setTimeout(() => terminalRefs[targetPanel].current?.focus(), 100)
     }
-  }, [agents, activePanel, attach])
+  }, [agents, activePanel, attach, restoreBufferToTerminal])
 
-  const handleSelectTab = useCallback((tabId: string) => {
-    const panel = panels[activePanel]
+  const handleSelectTab = useCallback((tabId: string, panelIndex?: number) => {
+    const targetPanel = panelIndex ?? activePanel
+    const panel = panels[targetPanel]
     if (!panel.agentId) return
 
     setPanels(prev => {
       const newPanels = [...prev] as [PanelState, PanelState]
-      newPanels[activePanel] = { ...newPanels[activePanel], tabId }
+      newPanels[targetPanel] = { ...newPanels[targetPanel], tabId }
       return newPanels
     })
 
-    const terminalRef = terminalRefs[activePanel]
-    terminalRef.current?.clear()
+    // Restore buffer content instead of clearing
+    restoreBufferToTerminal(targetPanel, panel.agentId, tabId)
     attach(panel.agentId, tabId)
-    setTimeout(() => terminalRef.current?.focus(), 100)
-  }, [panels, activePanel, attach])
+    setTimeout(() => terminalRefs[targetPanel].current?.focus(), 100)
+  }, [panels, activePanel, attach, restoreBufferToTerminal])
 
-  const handleCreateTab = useCallback(() => {
-    const panel = panels[activePanel]
+  const handleCreateTab = useCallback((panelIndex?: number) => {
+    const targetPanel = panelIndex ?? activePanel
+    const panel = panels[targetPanel]
     if (panel.agentId) {
       createTab(panel.agentId)
     }
   }, [panels, activePanel, createTab])
 
-  const handleCloseTab = useCallback((tabId: string) => {
-    const panel = panels[activePanel]
+  const handleCloseTab = useCallback((tabId: string, panelIndex?: number) => {
+    const targetPanel = panelIndex ?? activePanel
+    const panel = panels[targetPanel]
     if (panel.agentId) {
       closeTab(panel.agentId, tabId)
     }
@@ -220,11 +271,13 @@ export default function App() {
     if (activePanel !== panelIndex) {
       setActivePanel(panelIndex)
       const panel = panels[panelIndex]
-      if (panel.agentId) {
-        attach(panel.agentId, panel.tabId || undefined)
+      if (panel.agentId && panel.tabId) {
+        // Restore buffer when switching panels
+        restoreBufferToTerminal(panelIndex, panel.agentId, panel.tabId)
+        attach(panel.agentId, panel.tabId)
       }
     }
-  }, [activePanel, panels, attach])
+  }, [activePanel, panels, attach, restoreBufferToTerminal])
 
   const prDialogAgent = agents.find((a) => a.id === prDialogAgentId)
 
@@ -281,10 +334,10 @@ export default function App() {
             if (panelIndex !== activePanel) {
               setActivePanel(panelIndex)
             }
-            handleSelectTab(tabId)
+            handleSelectTab(tabId, panelIndex)
           }}
-          onCreateTab={handleCreateTab}
-          onCloseTab={handleCloseTab}
+          onCreateTab={() => handleCreateTab(panelIndex)}
+          onCloseTab={(tabId) => handleCloseTab(tabId, panelIndex)}
         />
         <div className={styles.terminalContainer}>
           <Terminal
