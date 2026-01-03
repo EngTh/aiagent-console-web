@@ -1,5 +1,5 @@
 import { WebSocket } from 'ws'
-import type { IPty } from 'node-pty'
+import type { IDisposable } from 'node-pty'
 import type { WSClientMessage, WSServerMessage } from '../shared/types.js'
 import type { AgentManager } from './agent-manager.js'
 
@@ -7,7 +7,7 @@ export class WSHandler {
   private ws: WebSocket
   private agentManager: AgentManager
   private attachedAgentId: string | null = null
-  private ptyDataHandler: ((data: string) => void) | null = null
+  private ptyDataDisposable: IDisposable | null = null
 
   constructor(ws: WebSocket, agentManager: AgentManager) {
     this.ws = ws
@@ -81,11 +81,10 @@ export class WSHandler {
       pty = this.agentManager.startAgent(agentId)
     }
 
-    // Setup data handler
-    this.ptyDataHandler = (data: string) => {
+    // Setup data handler and store disposable for cleanup
+    this.ptyDataDisposable = pty.onData((data: string) => {
       this.send({ type: 'output', data })
-    }
-    pty.onData(this.ptyDataHandler)
+    })
 
     this.send({ type: 'attached', agentId })
   }
@@ -93,11 +92,13 @@ export class WSHandler {
   private detachFromAgent(): void {
     if (!this.attachedAgentId) return
 
-    // Note: node-pty doesn't provide a way to remove specific listeners
-    // The connection will be cleaned up when the websocket closes
-    this.attachedAgentId = null
-    this.ptyDataHandler = null
+    // Dispose the data listener to prevent duplicate output
+    if (this.ptyDataDisposable) {
+      this.ptyDataDisposable.dispose()
+      this.ptyDataDisposable = null
+    }
 
+    this.attachedAgentId = null
     this.send({ type: 'detached' })
   }
 
@@ -138,6 +139,11 @@ export class WSHandler {
   }
 
   private cleanup(): void {
-    this.detachFromAgent()
+    // Dispose PTY listener
+    if (this.ptyDataDisposable) {
+      this.ptyDataDisposable.dispose()
+      this.ptyDataDisposable = null
+    }
+    this.attachedAgentId = null
   }
 }

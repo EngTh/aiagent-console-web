@@ -33,7 +33,7 @@ export function useAgents() {
       throw new Error(data.error || 'Failed to create agent')
     }
     const agent = await response.json()
-    setAgents((prev) => [...prev, agent])
+    // Don't add locally - WebSocket will push agents-updated
     return agent
   }, [])
 
@@ -45,7 +45,7 @@ export function useAgents() {
       const data = await response.json()
       throw new Error(data.error || 'Failed to delete agent')
     }
-    setAgents((prev) => prev.filter((a) => a.id !== agentId))
+    // Don't remove locally - WebSocket will push agents-updated
   }, [])
 
   const updateAgentStatus = useCallback((agentId: string, status: Agent['status']) => {
