@@ -112,16 +112,33 @@ export default function App() {
   const handleOutputSync = useCallback((chunks: OutputChunk[], tabId: string, lastSeq: number) => {
     const currentPanels = panelsRef.current
 
-    // Find panels showing this tabId and write all chunks
+    if (chunks.length === 0) return
+
+    // Find panels showing this tabId
     for (let i = 0; i < 2; i++) {
       const panel = currentPanels[i]
       if (panel.agentId && panel.tabId === tabId) {
-        // Clear and write all chunks in order
-        terminalRefs[i].current?.clear()
-        for (const chunk of chunks) {
-          terminalRefs[i].current?.write(chunk.data)
+        const currentLastSeq = getLastSeq(panel.agentId, tabId)
+        const firstChunkSeq = chunks[0].seq
+
+        // Check if this is a full sync (chunks start from 0 and we haven't seen data yet)
+        const isFullSync = firstChunkSeq === 0 && currentLastSeq === -1
+
+        if (isFullSync) {
+          // Full sync: clear and write all
+          terminalRefs[i].current?.clear()
+          for (const chunk of chunks) {
+            terminalRefs[i].current?.write(chunk.data)
+          }
+        } else {
+          // Incremental: only write chunks newer than what we have
+          for (const chunk of chunks) {
+            if (chunk.seq > currentLastSeq) {
+              terminalRefs[i].current?.write(chunk.data)
+            }
+          }
         }
-        // Update last seq
+
         updateLastSeq(panel.agentId, tabId, lastSeq)
       }
     }
@@ -249,6 +266,8 @@ export default function App() {
     const panel = panels[panelIndex]
     if (!panel.agentId || !panel.tabId) return
 
+    // Clear terminal first
+    terminalRefs[panelIndex].current?.clear()
     // Reset local seq tracking
     resetLastSeq(panel.agentId, panel.tabId)
     // Request all content from server (fromSeq = 0)
@@ -327,10 +346,16 @@ export default function App() {
     if (activePanel !== panelIndex) {
       setActivePanel(panelIndex)
       const panel = panels[panelIndex]
+      const otherPanel = panels[activePanel]
+
+      // Only re-attach if switching to a different agent:tab
+      // Skip if both panels show the same agent:tab (already receiving output)
       if (panel.agentId && panel.tabId) {
-        // Use incremental sync when switching panels
-        const fromSeq = getLastSeq(panel.agentId, panel.tabId) + 1
-        attach(panel.agentId, panel.tabId, fromSeq > 0 ? fromSeq : undefined)
+        const isSameTab = otherPanel.agentId === panel.agentId && otherPanel.tabId === panel.tabId
+        if (!isSameTab) {
+          const fromSeq = getLastSeq(panel.agentId, panel.tabId) + 1
+          attach(panel.agentId, panel.tabId, fromSeq > 0 ? fromSeq : undefined)
+        }
       }
     }
   }, [activePanel, panels, attach])
