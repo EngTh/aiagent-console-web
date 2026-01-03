@@ -22,7 +22,7 @@ export interface TerminalHandle {
   focus: () => void
 }
 
-const DEFAULT_FONT_FAMILY = '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, "Courier New", monospace'
+const DEFAULT_FONT_FAMILY = '"Maple Mono NF CN", "JetBrains Mono", "Fira Code", Menlo, Monaco, monospace'
 const DEFAULT_FONT_SIZE = 14
 
 const Terminal = forwardRef<TerminalHandle, TerminalProps>(
