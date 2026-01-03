@@ -25,11 +25,13 @@ export type WSClientMessage =
   | { type: 'resize'; cols: number; rows: number }
   | { type: 'start'; agentId: string }
   | { type: 'stop'; agentId: string }
+  | { type: 'gain-control' }
 
 export type WSServerMessage =
   | { type: 'output'; data: string }
-  | { type: 'attached'; agentId: string }
+  | { type: 'attached'; agentId: string; hasControl: boolean }
   | { type: 'detached' }
   | { type: 'agent-status'; agentId: string; status: Agent['status'] }
   | { type: 'error'; message: string }
   | { type: 'agents-updated'; agents: Agent[] }
+  | { type: 'control-changed'; hasControl: boolean }

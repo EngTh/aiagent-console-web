@@ -131,6 +131,22 @@ wss.on('connection', (ws: WebSocket) => {
   new WSHandler(ws, agentManager)
 })
 
+// Graceful shutdown - clean up all PTY processes
+function shutdown() {
+  console.log('Shutting down...')
+  agentManager.shutdown()
+  wss.clients.forEach((client) => client.close())
+  server.close(() => {
+    console.log('Server closed')
+    process.exit(0)
+  })
+  // Force exit after 5 seconds
+  setTimeout(() => process.exit(0), 5000)
+}
+
+process.on('SIGTERM', shutdown)
+process.on('SIGINT', shutdown)
+
 // Start server
 const PORT = process.env.PORT || config.port
 server.listen(PORT, () => {

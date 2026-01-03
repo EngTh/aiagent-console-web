@@ -138,6 +138,15 @@ npm install -g pm2
 - 在终端中运行任何命令，如 `claude` 启动 AI 助手
 - 支持所有终端特性：颜色、光标移动、滚动等
 
+### 多客户端支持
+
+支持多个浏览器窗口同时连接查看同一个 Agent：
+
+- **第一个连接**的客户端自动获得控制权，可以输入
+- **后续连接**的客户端为 **View Only** 模式，只能查看
+- View Only 客户端可以点击 **Gain Control** 按钮获取控制权
+- 同一时间只有一个客户端可以输入，避免冲突
+
 ### 创建 PR
 
 1. 右键点击 Agent
@@ -211,12 +220,14 @@ src/
 - `detach` - 断开连接
 - `input` - 发送键盘输入
 - `resize` - 调整终端大小
+- `gain-control` - 请求获取控制权
 
 **服务端 → 客户端：**
 - `output` - 终端输出
-- `attached` / `detached` - 连接状态
+- `attached` / `detached` - 连接状态（包含 hasControl）
 - `agent-status` - Agent 状态变化
 - `agents-updated` - Agent 列表更新
+- `control-changed` - 控制权变化通知
 
 ## License
 

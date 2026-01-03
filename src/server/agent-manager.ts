@@ -14,11 +14,43 @@ interface AgentProcess {
 export class AgentManager extends EventEmitter {
   private agents: Map<string, AgentProcess> = new Map()
   private worktreeManager: GitWorktreeManager
+  // Track which client has control of each agent (agentId -> clientId)
+  private controlOwners: Map<string, string> = new Map()
 
   constructor() {
     super()
     const baseWorkDir = path.join(os.homedir(), '.aiagent-console', 'worktrees')
     this.worktreeManager = new GitWorktreeManager(baseWorkDir)
+  }
+
+  // Control management
+  getControlOwner(agentId: string): string | null {
+    return this.controlOwners.get(agentId) || null
+  }
+
+  hasControl(agentId: string, clientId: string): boolean {
+    return this.controlOwners.get(agentId) === clientId
+  }
+
+  tryGainControl(agentId: string, clientId: string): boolean {
+    const currentOwner = this.controlOwners.get(agentId)
+    if (!currentOwner) {
+      // No owner, grant control
+      this.controlOwners.set(agentId, clientId)
+      this.emit('control-changed', agentId, clientId)
+      return true
+    }
+    // Take control from current owner
+    this.controlOwners.set(agentId, clientId)
+    this.emit('control-changed', agentId, clientId)
+    return true
+  }
+
+  releaseControl(agentId: string, clientId: string): void {
+    if (this.controlOwners.get(agentId) === clientId) {
+      this.controlOwners.delete(agentId)
+      this.emit('control-changed', agentId, null)
+    }
   }
 
   async createAgent(name: string, sourceRepo: string): Promise<Agent> {
@@ -109,6 +141,11 @@ export class AgentManager extends EventEmitter {
     agentProcess.pty = ptyProcess
     agentProcess.agent.status = 'running'
 
+    // Centralized PTY data handling - emit to all listeners
+    ptyProcess.onData((data) => {
+      this.emit('pty-data', agentId, data)
+    })
+
     ptyProcess.onExit(() => {
       agentProcess.pty = null
       agentProcess.agent.status = 'stopped'
@@ -176,5 +213,16 @@ export class AgentManager extends EventEmitter {
     }
 
     return this.worktreeManager.getDiff(agentProcess.agent.workDir)
+  }
+
+  shutdown(): void {
+    console.log(`Stopping ${this.agents.size} agent(s)...`)
+    for (const [agentId, agentProcess] of this.agents) {
+      if (agentProcess.pty) {
+        console.log(`Stopping agent ${agentId}`)
+        agentProcess.pty.kill()
+        agentProcess.pty = null
+      }
+    }
   }
 }
