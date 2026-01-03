@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import styles from './CreateAgentDialog.module.css'
 
 interface CreateAgentDialogProps {
@@ -14,8 +14,27 @@ export default function CreateAgentDialog({
 }: CreateAgentDialogProps) {
   const [name, setName] = useState('')
   const [sourceRepo, setSourceRepo] = useState('')
+  const [recentRepos, setRecentRepos] = useState<string[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchRecentRepos()
+    }
+  }, [isOpen])
+
+  const fetchRecentRepos = async () => {
+    try {
+      const response = await fetch('/api/recent-repos')
+      if (response.ok) {
+        const data = await response.json()
+        setRecentRepos(data.repos || [])
+      }
+    } catch {
+      // Silently fail - recent repos is optional
+    }
+  }
 
   if (!isOpen) return null
 
@@ -76,18 +95,27 @@ export default function CreateAgentDialog({
             <label className={styles.label} htmlFor="sourceRepo">
               Source Repository Path
             </label>
-            <input
-              id="sourceRepo"
-              type="text"
-              className={styles.input}
-              value={sourceRepo}
-              onChange={(e) => setSourceRepo(e.target.value)}
-              placeholder="/path/to/your/git/repo"
-              required
-            />
+            <div className={styles.inputWithDropdown}>
+              <input
+                id="sourceRepo"
+                type="text"
+                className={styles.input}
+                value={sourceRepo}
+                onChange={(e) => setSourceRepo(e.target.value)}
+                placeholder="/path/to/your/git/repo"
+                list="recentRepos"
+                required
+              />
+              <datalist id="recentRepos">
+                {recentRepos.map((repo) => (
+                  <option key={repo} value={repo} />
+                ))}
+              </datalist>
+            </div>
             <p className={styles.hint}>
               The git repository to create a worktree from. A new branch will be
               created for this agent.
+              {recentRepos.length > 0 && ' Select from recent repos or enter a new path.'}
             </p>
           </div>
 

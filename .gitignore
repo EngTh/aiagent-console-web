@@ -11,6 +11,7 @@ dist/
 
 # Local config (use config.example.json as template)
 config.json
+.aiagent-local.json
 
 # Logs
 *.log

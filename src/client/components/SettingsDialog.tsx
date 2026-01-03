@@ -6,14 +6,37 @@ interface Settings {
   logEnabled: boolean
 }
 
+interface TerminalSettings {
+  fontFamily: string
+  fontSize: number
+}
+
 interface SettingsDialogProps {
   isOpen: boolean
   onClose: () => void
+  onTerminalSettingsChange?: (settings: TerminalSettings) => void
 }
 
-export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
+const FONT_OPTIONS = [
+  'Menlo, Monaco, "Courier New", monospace',
+  'JetBrains Mono, monospace',
+  'Fira Code, monospace',
+  'Source Code Pro, monospace',
+  'Cascadia Code, monospace',
+  'SF Mono, monospace',
+  'Consolas, monospace',
+  'Monaco, monospace',
+]
+
+export default function SettingsDialog({
+  isOpen,
+  onClose,
+  onTerminalSettingsChange,
+}: SettingsDialogProps) {
   const [logDir, setLogDir] = useState('')
   const [logEnabled, setLogEnabled] = useState(false)
+  const [fontFamily, setFontFamily] = useState(FONT_OPTIONS[0])
+  const [fontSize, setFontSize] = useState(14)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState(false)
@@ -26,11 +49,22 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
 
   const fetchSettings = async () => {
     try {
-      const response = await fetch('/api/settings')
-      if (!response.ok) throw new Error('Failed to fetch settings')
-      const data: Settings = await response.json()
-      setLogDir(data.logDir || '')
-      setLogEnabled(data.logEnabled || false)
+      const [settingsRes, terminalRes] = await Promise.all([
+        fetch('/api/settings'),
+        fetch('/api/terminal-settings'),
+      ])
+
+      if (settingsRes.ok) {
+        const data: Settings = await settingsRes.json()
+        setLogDir(data.logDir || '')
+        setLogEnabled(data.logEnabled || false)
+      }
+
+      if (terminalRes.ok) {
+        const data: TerminalSettings = await terminalRes.json()
+        setFontFamily(data.fontFamily || FONT_OPTIONS[0])
+        setFontSize(data.fontSize || 14)
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load settings')
     }
@@ -45,16 +79,31 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
     setLoading(true)
 
     try {
-      const response = await fetch('/api/settings', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logDir, logEnabled }),
-      })
+      const [settingsRes, terminalRes] = await Promise.all([
+        fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ logDir, logEnabled }),
+        }),
+        fetch('/api/terminal-settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fontFamily, fontSize }),
+        }),
+      ])
 
-      if (!response.ok) {
-        const data = await response.json()
+      if (!settingsRes.ok) {
+        const data = await settingsRes.json()
         throw new Error(data.error || 'Failed to save settings')
       }
+
+      if (!terminalRes.ok) {
+        const data = await terminalRes.json()
+        throw new Error(data.error || 'Failed to save terminal settings')
+      }
+
+      // Notify parent of terminal settings change
+      onTerminalSettingsChange?.({ fontFamily, fontSize })
 
       setSuccess(true)
       setTimeout(() => setSuccess(false), 2000)
@@ -84,6 +133,43 @@ export default function SettingsDialog({ isOpen, onClose }: SettingsDialogProps)
         </div>
 
         <form onSubmit={handleSubmit}>
+          <div className={styles.sectionTitle}>Terminal</div>
+
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="fontFamily">
+              Font Family
+            </label>
+            <select
+              id="fontFamily"
+              className={styles.select}
+              value={fontFamily}
+              onChange={(e) => setFontFamily(e.target.value)}
+            >
+              {FONT_OPTIONS.map((font) => (
+                <option key={font} value={font}>
+                  {font.split(',')[0].replace(/"/g, '')}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className={styles.field}>
+            <label className={styles.label} htmlFor="fontSize">
+              Font Size
+            </label>
+            <input
+              id="fontSize"
+              type="number"
+              className={styles.input}
+              value={fontSize}
+              onChange={(e) => setFontSize(Number(e.target.value))}
+              min={10}
+              max={24}
+            />
+          </div>
+
+          <div className={styles.sectionTitle}>Logging</div>
+
           <div className={styles.field}>
             <label className={styles.checkboxLabel}>
               <input

@@ -1,6 +1,6 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import Sidebar from './components/Sidebar'
-import Terminal, { TerminalHandle } from './components/Terminal'
+import Terminal, { TerminalHandle, TerminalSettings } from './components/Terminal'
 import CreateAgentDialog from './components/CreateAgentDialog'
 import CreatePRDialog from './components/CreatePRDialog'
 import SettingsDialog from './components/SettingsDialog'
@@ -13,7 +13,18 @@ export default function App() {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [prDialogAgentId, setPRDialogAgentId] = useState<string | null>(null)
+  const [terminalSettings, setTerminalSettings] = useState<TerminalSettings | undefined>()
   const terminalRef = useRef<TerminalHandle>(null)
+
+  // Fetch terminal settings on mount
+  useEffect(() => {
+    fetch('/api/terminal-settings')
+      .then((res) => res.json())
+      .then((data) => setTerminalSettings(data))
+      .catch(() => {
+        // Use defaults if fetch fails
+      })
+  }, [])
 
   const {
     agents,
@@ -143,6 +154,7 @@ export default function App() {
               ref={terminalRef}
               onInput={sendInput}
               onResize={resize}
+              settings={terminalSettings}
             />
           ) : (
             <div className={styles.emptyTerminal}>
@@ -171,6 +183,7 @@ export default function App() {
       <SettingsDialog
         isOpen={showSettingsDialog}
         onClose={() => setShowSettingsDialog(false)}
+        onTerminalSettingsChange={setTerminalSettings}
       />
     </div>
   )
