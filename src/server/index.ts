@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url'
 import { AgentManager } from './agent-manager.js'
 import { WSHandler } from './ws-handler.js'
 import { loadConfig } from '../shared/config.js'
+import { addRecentRepo, getRecentRepos, getTerminalSettings, updateTerminalSettings } from './local-config.js'
 import type { CreateAgentRequest } from '../shared/types.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -15,7 +16,7 @@ const app = express()
 const server = createServer(app)
 const wss = new WebSocketServer({ server, path: '/ws' })
 
-const agentManager = new AgentManager()
+const agentManager = new AgentManager(config)
 
 // Middleware
 app.use(express.json())
@@ -50,6 +51,10 @@ app.post('/api/agents', async (req, res) => {
     }
 
     const agent = await agentManager.createAgent(name, sourceRepo)
+
+    // Save to recent repos
+    addRecentRepo(sourceRepo)
+
     res.status(201).json(agent)
   } catch (error) {
     console.error('Failed to create agent:', error)
@@ -114,6 +119,59 @@ app.post('/api/agents/:id/pr', async (req, res) => {
     console.error('Failed to create PR:', error)
     res.status(500).json({
       error: error instanceof Error ? error.message : 'Failed to create PR',
+    })
+  }
+})
+
+// Try local merge for an agent
+app.post('/api/agents/:id/merge', async (req, res) => {
+  try {
+    const { targetBranch } = req.body
+    const result = await agentManager.tryLocalMerge(req.params.id, targetBranch)
+    res.json(result)
+  } catch (error) {
+    console.error('Failed to merge:', error)
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to merge',
+    })
+  }
+})
+
+// Recent repos API
+app.get('/api/recent-repos', (_req, res) => {
+  res.json({ repos: getRecentRepos() })
+})
+
+// Terminal settings API
+app.get('/api/terminal-settings', (_req, res) => {
+  res.json(getTerminalSettings())
+})
+
+app.put('/api/terminal-settings', (req, res) => {
+  try {
+    const { fontFamily, fontSize } = req.body
+    const settings = updateTerminalSettings({ fontFamily, fontSize })
+    res.json(settings)
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to update terminal settings',
+    })
+  }
+})
+
+// Settings API
+app.get('/api/settings', (_req, res) => {
+  res.json(agentManager.getConfig())
+})
+
+app.put('/api/settings', (req, res) => {
+  try {
+    const { logDir, logEnabled } = req.body
+    agentManager.updateConfig({ logDir, logEnabled })
+    res.json(agentManager.getConfig())
+  } catch (error) {
+    res.status(500).json({
+      error: error instanceof Error ? error.message : 'Failed to update settings',
     })
   }
 })

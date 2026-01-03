@@ -1,4 +1,6 @@
 {
   "port": 17930,
-  "vitePort": 5173
+  "vitePort": 5173,
+  "logDir": "/path/to/logs",
+  "logEnabled": false
 }

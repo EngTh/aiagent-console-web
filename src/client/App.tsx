@@ -1,8 +1,9 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import Sidebar from './components/Sidebar'
-import Terminal, { TerminalHandle } from './components/Terminal'
+import Terminal, { TerminalHandle, TerminalSettings } from './components/Terminal'
 import CreateAgentDialog from './components/CreateAgentDialog'
 import CreatePRDialog from './components/CreatePRDialog'
+import SettingsDialog from './components/SettingsDialog'
 import { useAgents } from './hooks/useAgents'
 import { useWebSocket } from './hooks/useWebSocket'
 import styles from './App.module.css'
@@ -10,8 +11,20 @@ import styles from './App.module.css'
 export default function App() {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [showCreateDialog, setShowCreateDialog] = useState(false)
+  const [showSettingsDialog, setShowSettingsDialog] = useState(false)
   const [prDialogAgentId, setPRDialogAgentId] = useState<string | null>(null)
+  const [terminalSettings, setTerminalSettings] = useState<TerminalSettings | undefined>()
   const terminalRef = useRef<TerminalHandle>(null)
+
+  // Fetch terminal settings on mount
+  useEffect(() => {
+    fetch('/api/terminal-settings')
+      .then((res) => res.json())
+      .then((data) => setTerminalSettings(data))
+      .catch(() => {
+        // Use defaults if fetch fails
+      })
+  }, [])
 
   const {
     agents,
@@ -74,6 +87,28 @@ export default function App() {
     alert(`PR created: ${prUrl}`)
   }, [createPR, prDialogAgentId])
 
+  const handleMerge = useCallback(async (agentId: string) => {
+    try {
+      const response = await fetch(`/api/agents/${agentId}/merge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      })
+      const result = await response.json()
+
+      if (result.success) {
+        alert(`✅ ${result.message}`)
+      } else {
+        const conflictInfo = result.conflicts?.length
+          ? `\n\nConflicting files:\n${result.conflicts.join('\n')}`
+          : ''
+        alert(`⚠️ ${result.message}${conflictInfo}\n\nYou can manually merge branch '${result.branch}' into '${result.targetBranch}'.`)
+      }
+    } catch (error) {
+      alert(`Failed to merge: ${error instanceof Error ? error.message : 'Unknown error'}`)
+    }
+  }, [])
+
   const selectedAgent = agents.find((a) => a.id === selectedAgentId)
   const prDialogAgent = agents.find((a) => a.id === prDialogAgentId)
 
@@ -95,6 +130,8 @@ export default function App() {
         onCreateAgent={() => setShowCreateDialog(true)}
         onDeleteAgent={handleDeleteAgent}
         onCreatePR={(agentId) => setPRDialogAgentId(agentId)}
+        onMerge={handleMerge}
+        onOpenSettings={() => setShowSettingsDialog(true)}
       />
 
       <div className={styles.main}>
@@ -140,6 +177,7 @@ export default function App() {
               ref={terminalRef}
               onInput={sendInput}
               onResize={resize}
+              settings={terminalSettings}
             />
           ) : (
             <div className={styles.emptyTerminal}>
@@ -163,6 +201,12 @@ export default function App() {
         agentName={prDialogAgent?.name || ''}
         onClose={() => setPRDialogAgentId(null)}
         onCreate={handleCreatePR}
+      />
+
+      <SettingsDialog
+        isOpen={showSettingsDialog}
+        onClose={() => setShowSettingsDialog(false)}
+        onTerminalSettingsChange={setTerminalSettings}
       />
     </div>
   )

@@ -5,9 +5,15 @@ import { WebglAddon } from '@xterm/addon-webgl'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 
+export interface TerminalSettings {
+  fontFamily: string
+  fontSize: number
+}
+
 interface TerminalProps {
   onInput: (data: string) => void
   onResize: (cols: number, rows: number) => void
+  settings?: TerminalSettings
 }
 
 export interface TerminalHandle {
@@ -16,8 +22,11 @@ export interface TerminalHandle {
   focus: () => void
 }
 
+const DEFAULT_FONT_FAMILY = '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, "Courier New", monospace'
+const DEFAULT_FONT_SIZE = 14
+
 const Terminal = forwardRef<TerminalHandle, TerminalProps>(
-  ({ onInput, onResize }, ref) => {
+  ({ onInput, onResize, settings }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null)
     const terminalRef = useRef<XTerm | null>(null)
     const fitAddonRef = useRef<FitAddon | null>(null)
@@ -40,8 +49,8 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(
       const terminal = new XTerm({
         cursorBlink: true,
         cursorStyle: 'block',
-        fontFamily: '"JetBrains Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, "Courier New", monospace',
-        fontSize: 14,
+        fontFamily: settings?.fontFamily || DEFAULT_FONT_FAMILY,
+        fontSize: settings?.fontSize || DEFAULT_FONT_SIZE,
         lineHeight: 1.2,
         theme: {
           background: '#1a1b26',
@@ -115,6 +124,19 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(
         terminal.dispose()
       }
     }, [onInput, onResize])
+
+    // Update font settings when they change
+    useEffect(() => {
+      if (terminalRef.current && settings) {
+        terminalRef.current.options.fontFamily = settings.fontFamily || DEFAULT_FONT_FAMILY
+        terminalRef.current.options.fontSize = settings.fontSize || DEFAULT_FONT_SIZE
+        // Re-fit to adjust for new font size
+        if (fitAddonRef.current) {
+          fitAddonRef.current.fit()
+          onResize(terminalRef.current.cols, terminalRef.current.rows)
+        }
+      }
+    }, [settings?.fontFamily, settings?.fontSize, onResize])
 
     // Re-fit when container size changes
     useEffect(() => {
