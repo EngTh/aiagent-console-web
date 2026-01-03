@@ -109,6 +109,11 @@ export class AgentManager extends EventEmitter {
     agentProcess.pty = ptyProcess
     agentProcess.agent.status = 'running'
 
+    // Centralized PTY data handling - emit to all listeners
+    ptyProcess.onData((data) => {
+      this.emit('pty-data', agentId, data)
+    })
+
     ptyProcess.onExit(() => {
       agentProcess.pty = null
       agentProcess.agent.status = 'stopped'
@@ -176,5 +181,16 @@ export class AgentManager extends EventEmitter {
     }
 
     return this.worktreeManager.getDiff(agentProcess.agent.workDir)
+  }
+
+  shutdown(): void {
+    console.log(`Stopping ${this.agents.size} agent(s)...`)
+    for (const [agentId, agentProcess] of this.agents) {
+      if (agentProcess.pty) {
+        console.log(`Stopping agent ${agentId}`)
+        agentProcess.pty.kill()
+        agentProcess.pty = null
+      }
+    }
   }
 }

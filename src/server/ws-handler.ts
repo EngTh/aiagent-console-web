@@ -1,5 +1,4 @@
 import { WebSocket } from 'ws'
-import type { IDisposable } from 'node-pty'
 import type { WSClientMessage, WSServerMessage } from '../shared/types.js'
 import type { AgentManager } from './agent-manager.js'
 
@@ -7,11 +6,18 @@ export class WSHandler {
   private ws: WebSocket
   private agentManager: AgentManager
   private attachedAgentId: string | null = null
-  private ptyDataDisposable: IDisposable | null = null
+  private boundPtyDataHandler: (agentId: string, data: string) => void
+  private boundAgentsUpdatedHandler: (agents: unknown[]) => void
+  private boundAgentStatusHandler: (agentId: string, status: string) => void
 
   constructor(ws: WebSocket, agentManager: AgentManager) {
     this.ws = ws
     this.agentManager = agentManager
+
+    // Bind handlers so we can remove them later
+    this.boundPtyDataHandler = this.handlePtyData.bind(this)
+    this.boundAgentsUpdatedHandler = this.handleAgentsUpdated.bind(this)
+    this.boundAgentStatusHandler = this.handleAgentStatus.bind(this)
 
     this.setupEventListeners()
   }
@@ -21,7 +27,7 @@ export class WSHandler {
       try {
         const message = JSON.parse(data.toString()) as WSClientMessage
         this.handleMessage(message)
-      } catch (error) {
+      } catch {
         this.send({ type: 'error', message: 'Invalid message format' })
       }
     })
@@ -31,13 +37,24 @@ export class WSHandler {
     })
 
     // Listen for agent updates
-    this.agentManager.on('agents-updated', (agents) => {
-      this.send({ type: 'agents-updated', agents })
-    })
+    this.agentManager.on('agents-updated', this.boundAgentsUpdatedHandler)
+    this.agentManager.on('agent-status', this.boundAgentStatusHandler)
+    this.agentManager.on('pty-data', this.boundPtyDataHandler)
+  }
 
-    this.agentManager.on('agent-status', (agentId, status) => {
-      this.send({ type: 'agent-status', agentId, status })
-    })
+  private handlePtyData(agentId: string, data: string): void {
+    // Only send data if this client is attached to this agent
+    if (this.attachedAgentId === agentId) {
+      this.send({ type: 'output', data })
+    }
+  }
+
+  private handleAgentsUpdated(agents: unknown[]): void {
+    this.send({ type: 'agents-updated', agents } as WSServerMessage)
+  }
+
+  private handleAgentStatus(agentId: string, status: string): void {
+    this.send({ type: 'agent-status', agentId, status } as WSServerMessage)
   }
 
   private handleMessage(message: WSClientMessage): void {
@@ -65,7 +82,9 @@ export class WSHandler {
 
   private attachToAgent(agentId: string): void {
     // Detach from current agent if attached
-    this.detachFromAgent()
+    if (this.attachedAgentId) {
+      this.attachedAgentId = null
+    }
 
     const agent = this.agentManager.getAgent(agentId)
     if (!agent) {
@@ -78,26 +97,14 @@ export class WSHandler {
     // Get or create PTY
     let pty = this.agentManager.getPty(agentId)
     if (!pty) {
-      pty = this.agentManager.startAgent(agentId)
+      this.agentManager.startAgent(agentId)
     }
-
-    // Setup data handler and store disposable for cleanup
-    this.ptyDataDisposable = pty.onData((data: string) => {
-      this.send({ type: 'output', data })
-    })
 
     this.send({ type: 'attached', agentId })
   }
 
   private detachFromAgent(): void {
     if (!this.attachedAgentId) return
-
-    // Dispose the data listener to prevent duplicate output
-    if (this.ptyDataDisposable) {
-      this.ptyDataDisposable.dispose()
-      this.ptyDataDisposable = null
-    }
-
     this.attachedAgentId = null
     this.send({ type: 'detached' })
   }
@@ -113,7 +120,6 @@ export class WSHandler {
 
   private handleResize(cols: number, rows: number): void {
     if (!this.attachedAgentId) return
-
     this.agentManager.resizePty(this.attachedAgentId, cols, rows)
   }
 
@@ -139,11 +145,10 @@ export class WSHandler {
   }
 
   private cleanup(): void {
-    // Dispose PTY listener
-    if (this.ptyDataDisposable) {
-      this.ptyDataDisposable.dispose()
-      this.ptyDataDisposable = null
-    }
+    // Remove all event listeners
+    this.agentManager.off('agents-updated', this.boundAgentsUpdatedHandler)
+    this.agentManager.off('agent-status', this.boundAgentStatusHandler)
+    this.agentManager.off('pty-data', this.boundPtyDataHandler)
     this.attachedAgentId = null
   }
 }
